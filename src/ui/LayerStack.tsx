@@ -23,7 +23,7 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
   const applyLook = useStore((s) => s.applyLook)
   const hasImage = useStore((s) => s.image !== null)
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null)
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number; sheet: boolean } | null>(null)
   const [tab, setTab] = useState<'fixes' | 'tools' | 'looks'>('tools')
   const kinds = Object.keys(ADJUSTMENT_META) as AdjustmentKind[]
   const suggestions = useStore((s) => s.suggestions)
@@ -32,8 +32,19 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
   useLayoutEffect(() => {
     const place = () => {
       const a = anchor.getBoundingClientRect()
-      const width = 300
       const margin = 10
+      // Phone: bottom sheet in the thumb zone (Darkroom / NN/g). Desktop keeps
+      // the anchored popover so the sidebar layout does not jump.
+      if (window.matchMedia('(max-width: 900px)').matches) {
+        setPos({
+          left: margin,
+          top: Math.round(window.innerHeight * 0.28),
+          maxHeight: Math.round(window.innerHeight * 0.72) - margin,
+          sheet: true,
+        })
+        return
+      }
+      const width = 300
       const below = window.innerHeight - a.bottom - margin
       const above = a.top - margin
       // open downward when there is room, otherwise flip up
@@ -42,6 +53,7 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
         left: Math.max(margin, Math.min(a.right - width, window.innerWidth - width - margin)),
         top: openDown ? a.bottom + 6 : Math.max(margin, a.top - 6 - Math.min(above, 520)),
         maxHeight: Math.max(200, Math.min(520, openDown ? below : above)),
+        sheet: false,
       })
     }
     place()
@@ -72,9 +84,11 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
 
   return createPortal(
     <div
-      className="add-menu"
+      className={`add-menu ${pos.sheet ? 'sheet' : ''}`}
       ref={ref}
-      style={{ left: pos.left, top: pos.top, maxHeight: pos.maxHeight }}
+      style={pos.sheet
+        ? { left: pos.left, right: pos.left, top: pos.top, maxHeight: pos.maxHeight, width: 'auto' }
+        : { left: pos.left, top: pos.top, maxHeight: pos.maxHeight }}
     >
       <div className="add-tabs">
         <button className={tab === 'fixes' ? 'active' : ''} onClick={() => setTab('fixes')}>
@@ -186,16 +200,26 @@ export function LayerStack({ onFix, thumbs }: { onFix: (id: string) => void; thu
   const selectedRowRef = useRef<HTMLDivElement>(null)
 
   const selected = layers.find((l) => l.id === selectedId) ?? null
+  const propsRef = useRef<HTMLDivElement>(null)
 
   // the list is height-capped, so keep the selected row in view
   useEffect(() => {
     selectedRowRef.current?.scrollIntoView({ block: 'nearest' })
   }, [selectedId])
+
+  // On a phone the props pane is the editor — bring it on-screen when the
+  // selection changes so adding Curves does not look like a dead end.
+  useEffect(() => {
+    if (!selectedId || !propsRef.current) return
+    if (!window.matchMedia('(max-width: 900px)').matches) return
+    propsRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [selectedId])
+
   // topmost layer renders last, so show the stack in reverse
   const display = [...layers].reverse()
 
   return (
-    <div className="stack-panel">
+    <div className={`stack-panel ${selected ? 'has-selection' : ''}`}>
       <div className="stack-head">
         <span>Layers{layers.length > 0 && ` · ${layers.length}`}</span>
         <div className="stack-head-actions">
@@ -266,7 +290,7 @@ export function LayerStack({ onFix, thumbs }: { onFix: (id: string) => void; thu
       </div>
 
       {selected && (
-        <div className="props" key={selected.id}>
+        <div className="props" key={selected.id} ref={propsRef}>
           {/* Blend and opacity are per-layer plumbing, not the point of the
               panel — one dense row instead of a section with two full rows,
               so the adjustment's own controls start near the top. */}
@@ -297,8 +321,10 @@ export function LayerStack({ onFix, thumbs }: { onFix: (id: string) => void; thu
               onChange={(v) => setLayerProp(selected.id, { opacity: v })}
             />
           </div>
-          <MaskPanel layer={selected} />
+          {/* Adjustment first: on a short phone panel the mask row used to push
+              Curves / Levels below the fold so a new layer looked uneditable. */}
           <AdjustmentPanel layer={selected} />
+          <MaskPanel layer={selected} />
         </div>
       )}
 

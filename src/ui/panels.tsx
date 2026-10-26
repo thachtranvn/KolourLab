@@ -8,7 +8,7 @@ import {
   PHOTO_FILTERS, GRADIENT_PRESETS, CHANNEL_MIXER_PRESETS, CURVE_PRESETS,
   LUT_PRESET_NAMES, registerCustomCube, listCustomCubes,
 } from '../engine/presets'
-import { parseCube, clamp } from '../engine/lut'
+import { parseCube, clamp, sampleCurve } from '../engine/lut'
 import { WB_GAIN } from '../engine/glsl'
 import { colourlab } from '../api'
 import type {
@@ -123,6 +123,28 @@ function withPoint(curve: CurvePoints, x: number, y: number, where: 'first' | 'l
   return [...kept, { x: clamp(x, lo, hi), y: clamp(y, 0, 1) }].sort((a, b) => a.x - b.x)
 }
 
+/** Fixed input positions for Lightroom-style tone sliders → RGB curve points. */
+const TONE_X = { blacks: 0, shadows: 0.25, highlights: 0.75, whites: 1 } as const
+type ToneKey = keyof typeof TONE_X
+const TONE_ORDER: ToneKey[] = ['blacks', 'shadows', 'highlights', 'whites']
+
+/** Read a ±100 tone slider from how far the curve sits above/below identity. */
+function readTone(curve: CurvePoints, key: ToneKey): number {
+  const x = TONE_X[key]
+  return Math.round(clamp((sampleCurve(curve, x) - x) * 200, -100, 100))
+}
+
+/** Rewrite the master curve as four tone points; one slider changed. */
+function writeTone(curve: CurvePoints, key: ToneKey, value: number): CurvePoints {
+  return TONE_ORDER.map((k) => {
+    const x = TONE_X[k]
+    const y = k === key
+      ? clamp(x + value / 200, 0, 1)
+      : clamp(sampleCurve(curve, x), 0, 1)
+    return { x, y }
+  })
+}
+
 function CurvesPanel({ layer }: { layer: Layer }) {
   const p = layer.params as CurvesParams
   const patch = usePatch(layer.id)
@@ -131,6 +153,9 @@ function CurvesPanel({ layer }: { layer: Layer }) {
   const setPicking = useStore((s) => s.setPicking)
   const setPainting = useStore((s) => s.setPainting)
   const [ch, setCh] = useState<'rgb' | 'r' | 'g' | 'b'>('rgb')
+  // Tone sliders are the phone-default editor (docs/mobile.md); the full graph
+  // stays behind Advanced so a new Curves layer is immediately editable.
+  const [advanced, setAdvanced] = useState(false)
   // Ownership is by identity: the store holds one picker callback, so this
   // control is armed only while *its own* callback is the live one. A plain
   // flag made every other eyedropper on screen look like this one, and
@@ -177,39 +202,68 @@ function CurvesPanel({ layer }: { layer: Layer }) {
     setPicking(mine)
   }
 
+  const setTone = (key: ToneKey, value: number) => {
+    patch({ rgb: writeTone(p.rgb, key, value) })
+  }
+
   return (
     <>
-      <Segmented value={ch} onChange={setCh} options={[
-        { value: 'rgb', label: 'RGB' }, { value: 'r', label: 'Red' },
-        { value: 'g', label: 'Green' }, { value: 'b', label: 'Blue' },
-      ]} />
+      <p className="hint">
+        Blacks / Shadows / Highlights / Whites shape the master curve — same
+        engine as the graph below.
+      </p>
+      <Slider label="Blacks" value={readTone(p.rgb, 'blacks')} min={-100} max={100}
+        onChange={(v) => setTone('blacks', v)} />
+      <Slider label="Shadows" value={readTone(p.rgb, 'shadows')} min={-100} max={100}
+        onChange={(v) => setTone('shadows', v)} />
+      <Slider label="Highlights" value={readTone(p.rgb, 'highlights')} min={-100} max={100}
+        onChange={(v) => setTone('highlights', v)} />
+      <Slider label="Whites" value={readTone(p.rgb, 'whites')} min={-100} max={100}
+        onChange={(v) => setTone('whites', v)} />
 
-      <div className="dropper-row">
-        {DROPPERS.map((d) => (
-          <button
-            key={d.kind}
-            className={`btn small ${armed === d.kind ? 'primary' : ''}`}
-            title={d.hint}
-            onClick={() => armDropper(d.kind)}
-          >
-            ⌖ {d.label}
-          </button>
-        ))}
-      </div>
-      <CurveEditor channel={ch} points={p[ch]} onChange={(pts) => patch({ [ch]: pts })} />
-      <Select
-        label="Preset"
-        value=""
-        options={[{ value: '', label: 'Apply a preset…' },
-          ...CURVE_PRESETS.map((c) => ({ value: c.name, label: c.name }))]}
-        onChange={(name) => {
-          const preset = CURVE_PRESETS.find((c) => c.name === name)
-          if (preset) patch({ [ch]: preset.points.map((pt) => ({ ...pt })) })
-        }}
-      />
-      <button className="btn" onClick={() => { pushHistory(); patch({ [ch]: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }) }}>
-        Reset {ch.toUpperCase()} channel
+      <button
+        className={`btn wide ${advanced ? 'active' : ''}`}
+        onClick={() => setAdvanced((v) => !v)}
+        aria-expanded={advanced}
+      >
+        {advanced ? '▾ Hide curve graph' : '▸ Advanced curve'}
       </button>
+
+      {advanced && (
+        <>
+          <Segmented value={ch} onChange={setCh} options={[
+            { value: 'rgb', label: 'RGB' }, { value: 'r', label: 'Red' },
+            { value: 'g', label: 'Green' }, { value: 'b', label: 'Blue' },
+          ]} />
+
+          <div className="dropper-row">
+            {DROPPERS.map((d) => (
+              <button
+                key={d.kind}
+                className={`btn small ${armed === d.kind ? 'primary' : ''}`}
+                title={d.hint}
+                onClick={() => armDropper(d.kind)}
+              >
+                ⌖ {d.label}
+              </button>
+            ))}
+          </div>
+          <CurveEditor channel={ch} points={p[ch]} onChange={(pts) => patch({ [ch]: pts })} />
+          <Select
+            label="Preset"
+            value=""
+            options={[{ value: '', label: 'Apply a preset…' },
+              ...CURVE_PRESETS.map((c) => ({ value: c.name, label: c.name }))]}
+            onChange={(name) => {
+              const preset = CURVE_PRESETS.find((c) => c.name === name)
+              if (preset) patch({ [ch]: preset.points.map((pt) => ({ ...pt })) })
+            }}
+          />
+          <button className="btn" onClick={() => { pushHistory(); patch({ [ch]: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }) }}>
+            Reset {ch.toUpperCase()} channel
+          </button>
+        </>
+      )}
     </>
   )
 }

@@ -363,14 +363,20 @@ export default function App() {
               onClick={() => setCompare(compare === 1 ? 0 : 1)} title="Split before/after (\)">
               Split
             </button>
-            <button className={`btn ${compare === 2 ? 'active' : ''}`} disabled={!image}
-              onMouseDown={() => setCompare(2)} onMouseUp={() => setCompare(0)} onMouseLeave={() => compare === 2 && setCompare(0)}
-              title="Hold to see the original (X)">
+            <button
+              className={`btn ${compare === 2 ? 'active' : ''}`}
+              disabled={!image}
+              onPointerDown={(e) => { e.preventDefault(); setCompare(2) }}
+              onPointerUp={() => setCompare(0)}
+              onPointerCancel={() => setCompare(0)}
+              onPointerLeave={() => compare === 2 && setCompare(0)}
+              title="Hold to see the original (X)"
+            >
               Original
             </button>
           </div>
 
-          <div className="topbar-group surround" title="Backdrop the photo is matted against">
+          <div className="topbar-group surround desk-only" title="Backdrop the photo is matted against">
             {SURROUNDS.map((s) => (
               <button
                 key={s.key}
@@ -383,22 +389,24 @@ export default function App() {
           </div>
 
           <div className="topbar-group zoom">
-            <button className="btn" onClick={() => setZoom(zoom / 1.25)} disabled={!image}>−</button>
+            <button className="btn" onClick={() => setZoom(zoom / 1.25)} disabled={!image} aria-label="Zoom out">−</button>
             <button className="btn zoom-label" onClick={zoomToFit} disabled={!image}>
               {Math.round(zoom * 100)}%
             </button>
-            <button className="btn" onClick={() => setZoom(zoom * 1.25)} disabled={!image}>+</button>
+            <button className="btn" onClick={() => setZoom(zoom * 1.25)} disabled={!image} aria-label="Zoom in">+</button>
           </div>
 
           <div className="topbar-spacer" />
 
-          <div className="topbar-group">
+          <div className="topbar-group desk-only">
             <input ref={recipeRef} type="file" accept="application/json" hidden
               onChange={(e) => { const f = e.target.files?.[0]; if (f) importRecipe(f); e.target.value = '' }} />
             <button className="btn" onClick={() => recipeRef.current?.click()}>Import recipe</button>
             <button className="btn" disabled={!layers.length} onClick={exportRecipe}>Save recipe</button>
-            <button className="btn" disabled={!image} onClick={() => exportImage('image/jpeg')}>Export JPEG</button>
-            <button className="btn primary" disabled={!image} onClick={() => exportImage('image/png')}>Export PNG</button>
+          </div>
+          <div className="topbar-group">
+            <button className="btn" disabled={!image} onClick={() => exportImage('image/jpeg')}>JPEG</button>
+            <button className="btn primary" disabled={!image} onClick={() => exportImage('image/png')}>PNG</button>
           </div>
         </header>
 

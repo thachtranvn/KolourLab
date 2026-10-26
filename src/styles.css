@@ -24,6 +24,9 @@
   --accent: #ededed;
   --fill: #b4b4b4;
   --warn: #c9a227;
+  /* Apple HIG / Material: 44px ideal, 32px absolute floor for touch */
+  --touch: 44px;
+  --touch-min: 32px;
   color-scheme: dark;
 }
 
@@ -629,10 +632,136 @@ button, input, select { font: inherit; color: inherit; }
 .fatal h1 { font-size: 20px; }
 .fatal p { color: var(--dim); }
 
-/* --- narrow screens ----------------------------------------------------- */
+/* --- touch targets (phone + coarse pointer) ----------------------------- */
+
+@media (pointer: coarse), (max-width: 900px) {
+  .btn {
+    min-width: var(--touch);
+    min-height: var(--touch);
+    padding: 10px 14px;
+  }
+  .btn.small {
+    min-height: var(--touch);
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .icon-btn {
+    min-width: var(--touch-min);
+    min-height: var(--touch-min);
+    padding: 6px 10px;
+  }
+
+  .swatch-btn {
+    width: var(--touch-min);
+    height: var(--touch-min);
+  }
+
+  .add-tabs button,
+  .segmented button {
+    min-height: var(--touch);
+    padding: 10px 8px;
+  }
+  .add-menu button {
+    min-height: var(--touch);
+    padding: 10px 12px;
+  }
+
+  /* Always show layer actions — hover never fires on touch. */
+  .layer-actions { opacity: 1; }
+  .layer-actions button {
+    min-width: var(--touch);
+    min-height: var(--touch);
+    padding: 8px;
+    font-size: 14px;
+  }
+  .layer .eye {
+    min-width: var(--touch);
+    min-height: var(--touch);
+    font-size: 14px;
+  }
+  .layer {
+    min-height: var(--touch);
+    padding: 8px 8px 8px 4px;
+    gap: 8px;
+  }
+
+  .slider-track-wrap {
+    height: var(--touch);
+  }
+  .slider input[type="range"] {
+    height: 6px;
+  }
+  .slider input[type="range"]::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+  }
+  .slider input[type="range"]::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+  }
+
+  .dropper-row { gap: 6px; flex-wrap: wrap; }
+  .dropper-row .btn { min-height: var(--touch-min); }
+
+  .suggestion-actions .btn { min-height: var(--touch); }
+  .curve { max-width: none; }
+}
+
+/* --- narrow screens: photo on top, tools in the thumb zone -------------- */
 
 @media (max-width: 900px) {
   .main { flex-direction: column; }
-  .sidebar { flex: 1 1 auto; border-left: none; border-top: 1px solid var(--line); }
-  .viewer { flex: 0 0 46vh; }
+
+  .viewer {
+    flex: 1 1 40%;
+    min-height: 34vh;
+  }
+
+  .sidebar {
+    flex: 1 1 60%;
+    min-height: 0;
+    max-height: 62vh;
+    border-left: none;
+    border-top: 1px solid var(--line);
+    border-radius: 16px 16px 0 0;
+  }
+
+  .topbar {
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  .topbar .brand span:not(.logo) { display: none; }
+  .desk-only { display: none !important; }
+
+  /* When a layer is selected, shrink the list so the editor is the hero. */
+  .stack-panel.has-selection .layer-list {
+    max-height: 96px;
+    min-height: 0;
+    flex: 0 0 auto;
+  }
+  .stack-panel.has-selection .props {
+    flex: 1 1 auto;
+  }
+
+  .hist-panel { display: none; }
+  .sidebar > .btn.wide { display: none; }
+
+  .add-menu.sheet {
+    width: auto;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.55);
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  .add-menu.sheet::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line-strong);
+    margin: 4px auto 10px;
+  }
+
+  .section-body { padding-bottom: 16px; }
+  .props-head { padding-top: 10px; }
 }

@@ -361,6 +361,14 @@ export function CurveEditor({ points, onChange, channel }: {
     return ux >= 0 && ux <= SIZE && uy >= 0 && uy <= SIZE
   }
 
+  // Phones need a larger grab radius than a mouse cursor; 12px felt precise on
+  // desktop and impossible with a thumb (docs/mobile.md: 5px drag targets).
+  const hitPx = typeof window !== 'undefined'
+    && window.matchMedia('(pointer: coarse), (max-width: 900px)').matches
+    ? 28
+    : 12
+  const handleR = hitPx > 12 ? 8 : 5
+
   const onPointerDown = (e: React.PointerEvent) => {
     // right-click is the delete gesture; it must not start a drag
     if (e.button !== 0) return
@@ -376,9 +384,9 @@ export function CurveEditor({ points, onChange, channel }: {
     // Only *creating* has to be confined to the plot. An end point sits on the
     // corner, so half of its circle is drawn out over the pad — rejecting those
     // presses outright made the visible half of the handle undraggable.
-    if (best >= 12 && !inPlot(e)) return
+    if (best >= hitPx && !inPlot(e)) return
 
-    if (best < 12) {
+    if (best < hitPx) {
       // Snapshot lazily: a press that never turns into a drag must not land on
       // the undo stack, or clicking a handle fills it with identical entries.
       dragRef.current = nearest
@@ -462,21 +470,29 @@ export function CurveEditor({ points, onChange, channel }: {
     workingRef.current = null
   }
 
-  const removePoint = (e: React.MouseEvent, i: number) => {
-    e.preventDefault()
-    e.stopPropagation()
+  const removePointAt = (i: number) => {
     if (sorted.length <= 2) return
     // end the gesture first: the index it holds is about to be wrong
     dragRef.current = null
     workingRef.current = null
     pushHistory()
-    onChange(sorted.filter((_, k) => k !== i))
+    const next = sorted.filter((_, k) => k !== i)
+    onChange(next)
+    setActive(Math.min(i, next.length - 1))
+  }
+
+  const removePoint = (e: React.MouseEvent, i: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    removePointAt(i)
   }
 
   const tint = channel === 'rgb' ? null : CHANNEL_TINT[channel]
   const first = sorted[0]
   const lastPt = sorted[sorted.length - 1]
-  const shown = sorted[Math.min(active, sorted.length - 1)] ?? first
+  const activeIdx = Math.min(active, sorted.length - 1)
+  const shown = sorted[activeIdx] ?? first
+  const canDelete = sorted.length > 2
 
   return (
     <div className="curve-wrap">
@@ -523,9 +539,9 @@ export function CurveEditor({ points, onChange, channel }: {
               key={i}
               cx={cx}
               cy={cy}
-              r={5}
+              r={i === activeIdx ? handleR + 1 : handleR}
               fill={stroke}
-              stroke="rgba(0,0,0,0.65)"
+              stroke={i === activeIdx ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.65)'}
               strokeWidth={1.5}
               onContextMenu={(e) => removePoint(e, i)}
               onDoubleClick={(e) => removePoint(e, i)}
@@ -544,9 +560,9 @@ export function CurveEditor({ points, onChange, channel }: {
             onPointerDown={onAxisDown(which)}
             transform={`translate(${p.x * SIZE} 0)`}
           >
-            <rect x={-9} y={SIZE + 2} width={18} height={AXIS - 2} fill="transparent" />
+            <rect x={-14} y={SIZE + 2} width={28} height={AXIS - 2} fill="transparent" />
             <path
-              d={`M0,${SIZE + 3} L-6,${SIZE + 14} L6,${SIZE + 14} Z`}
+              d={`M0,${SIZE + 3} L-7,${SIZE + 15} L7,${SIZE + 15} Z`}
               fill={which === 'black' ? '#111' : '#ededed'}
               stroke={which === 'black' ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.5)'}
               strokeWidth={1}
@@ -560,9 +576,18 @@ export function CurveEditor({ points, onChange, channel }: {
         <span>Output <b>{Math.round(shown.y * 255)}</b></span>
       </div>
 
+      <button
+        className="btn"
+        disabled={!canDelete}
+        onClick={() => removePointAt(activeIdx)}
+        title={canDelete ? 'Delete the selected point' : 'Need at least two points'}
+      >
+        Delete selected point
+      </button>
+
       <p className="hint">
-        Click to add a point · drag to shape · double-click or right-click to delete.
-        The triangles below set the black and white points.
+        Tap the graph to add a point · drag to shape · delete with the button
+        (or double-tap / right-click). The triangles below set black and white points.
       </p>
     </div>
   )
