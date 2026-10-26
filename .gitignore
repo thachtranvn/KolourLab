@@ -1,5 +1,7 @@
 node_modules
 dist
+.vercel
 *.tsbuildinfo
 .DS_Store
 .playwright-mcp
+.env*

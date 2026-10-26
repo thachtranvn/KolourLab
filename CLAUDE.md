@@ -132,13 +132,15 @@ Watch out for these:
 
 ## Deploying
 
-Cloudflare Pages. Authenticate with `npx wrangler login`, then:
+Vercel (Vite static). Authenticate with `npx vercel login`, then:
 
 ```bash
+# Empty public/ first — Vite copies it into dist verbatim
 npm run build
-npx wrangler pages deploy dist --project-name=<project> --branch=main
+npx vercel --prod
 ```
 
+Or link the GitHub repo in the Vercel dashboard for automatic deploys on push.
 A static bundle — four files, no server, no build step on the host.
 
 **Empty `public/` before building.** Vite copies it into `dist` verbatim, and
