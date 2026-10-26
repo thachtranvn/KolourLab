@@ -68,28 +68,40 @@ button, input, select { font: inherit; color: inherit; }
 .topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 8px 14px;
+  gap: 8px;
+  padding: 6px 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-height: 0;
+  overflow: visible;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-weight: 600;
   letter-spacing: 0.2px;
-  padding-right: 6px;
+  flex: 0 0 auto;
 }
-.brand .logo { font-size: 18px; color: var(--text); }
+.brand .logo { font-size: 18px; color: var(--text); line-height: 1; }
+.brand-name { white-space: nowrap; }
 
-.topbar-group { display: flex; gap: 6px; align-items: center; }
+.topbar-group { display: flex; gap: 4px; align-items: center; flex: 0 0 auto; }
+.topbar-spacer { flex: 1 1 auto; min-width: 4px; }
+
+/* Compact icon chips in the topbar (undo / more) keep the row to one line. */
+.topbar .btn.icon {
+  padding-inline: 0;
+  min-width: 36px;
+  justify-content: center;
+  display: inline-flex;
+  align-items: center;
+}
 
 /* backdrop picker — the swatches are the only place greys are literal values */
-.topbar-group.surround { gap: 3px; }
 .swatch-btn {
   width: 18px; height: 18px; padding: 0;
   border-radius: 5px;
@@ -98,8 +110,71 @@ button, input, select { font: inherit; color: inherit; }
 }
 .swatch-btn:hover { border-color: var(--text); }
 .swatch-btn.active { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--text); }
-.topbar-group.zoom .zoom-label { min-width: 62px; }
-.topbar-spacer { flex: 1 1 auto; }
+
+/* ⋯ overflow menu */
+.more-menu {
+  position: fixed;
+  z-index: 70;
+  width: 260px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.more-menu > button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.more-menu > button:hover:not(:disabled) { background: var(--panel-3); }
+.more-menu > button:disabled { opacity: 0.38; cursor: default; }
+.more-menu > button.active { background: var(--line-strong); }
+.more-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+.more-label {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 6px 12px 2px;
+}
+.more-row {
+  display: flex;
+  gap: 4px;
+  padding: 2px 6px 6px;
+  align-items: center;
+}
+.more-row > button {
+  flex: 1 1 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 6px;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.more-row > button:hover:not(:disabled) { background: var(--panel-3); }
+.more-row > button:disabled { opacity: 0.38; cursor: default; }
+.more-row.surround { gap: 6px; padding-inline: 12px; }
+.more-row.surround .swatch-btn { width: 28px; height: 28px; flex: 0 0 auto; }
 
 /* --- buttons ------------------------------------------------------------ */
 
@@ -640,6 +715,14 @@ button, input, select { font: inherit; color: inherit; }
     min-height: var(--touch);
     padding: 10px 14px;
   }
+  .topbar .btn.icon {
+    min-width: var(--touch);
+    min-height: var(--touch);
+  }
+  .more-menu > button,
+  .more-row > button {
+    min-height: var(--touch);
+  }
   .btn.small {
     min-height: var(--touch);
     padding: 10px 12px;
@@ -727,11 +810,11 @@ button, input, select { font: inherit; color: inherit; }
   }
 
   .topbar {
-    gap: 8px;
-    padding: 6px 10px;
+    gap: 4px;
+    padding: 4px 8px;
   }
-  .topbar .brand span:not(.logo) { display: none; }
-  .desk-only { display: none !important; }
+  .brand-name { display: none; }
+  .topbar .btn { padding-inline: 10px; }
 
   /* When a layer is selected, shrink the list so the editor is the hero. */
   .stack-panel.has-selection .layer-list {
