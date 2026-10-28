@@ -479,6 +479,134 @@ vec3 adjust(vec3 c) {
   return o;
 }`
 
+// Neighbourhood ops read u_src / v_uv directly; the renderer always binds
+// u_texel so these can sample a fixed pixel radius.
+const HIGHLIGHTS_SHADOWS = `
+uniform float u_highlights;  // -1..1
+uniform float u_shadows;     // -1..1
+
+vec3 adjust(vec3 c) {
+  float y = lumaPS(c);
+  // Soft masks so the two ends meet in the midtones without a hard seam.
+  float hw = smoothstep(0.35, 0.85, y);
+  float sw = 1.0 - smoothstep(0.15, 0.65, y);
+  float h = u_highlights >= 0.0
+    ? (1.0 - y) * u_highlights * hw
+    : -y * (-u_highlights) * hw;
+  float s = u_shadows >= 0.0
+    ? (1.0 - y) * u_shadows * sw
+    : -y * (-u_shadows) * sw;
+  return c + (h + s);
+}`
+
+const CLARITY = `
+uniform vec2 u_texel;
+uniform float u_amount;  // -1..1
+
+vec3 adjust(vec3 c) {
+  // Wide soft blur — clarity is midtone local contrast, not fine edges.
+  vec2 t = u_texel * 2.5;
+  vec3 blur =
+      texture(u_src, v_uv + vec2(-t.x, 0.0)).rgb
+    + texture(u_src, v_uv + vec2( t.x, 0.0)).rgb
+    + texture(u_src, v_uv + vec2(0.0, -t.y)).rgb
+    + texture(u_src, v_uv + vec2(0.0,  t.y)).rgb
+    + texture(u_src, v_uv + vec2(-t.x, -t.y)).rgb
+    + texture(u_src, v_uv + vec2( t.x, -t.y)).rgb
+    + texture(u_src, v_uv + vec2(-t.x,  t.y)).rgb
+    + texture(u_src, v_uv + vec2( t.x,  t.y)).rgb;
+  blur *= 0.125;
+  float y = lumaPS(c);
+  float mid = smoothstep(0.12, 0.35, y) * (1.0 - smoothstep(0.65, 0.88, y));
+  return mix(c, c + (c - blur) * u_amount, mid);
+}`
+
+const SHARPNESS = `
+uniform vec2 u_texel;
+uniform float u_amount;  // -1..1
+
+vec3 adjust(vec3 c) {
+  vec2 t = u_texel;
+  vec3 blur =
+      texture(u_src, v_uv + vec2(-t.x, 0.0)).rgb
+    + texture(u_src, v_uv + vec2( t.x, 0.0)).rgb
+    + texture(u_src, v_uv + vec2(0.0, -t.y)).rgb
+    + texture(u_src, v_uv + vec2(0.0,  t.y)).rgb;
+  blur *= 0.25;
+  return c + (c - blur) * u_amount;
+}`
+
+const GRAIN = `
+uniform vec2 u_texel;
+uniform float u_amount;  // 0..1
+uniform float u_size;    // 0..1 — scales the noise cell
+
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+vec3 adjust(vec3 c) {
+  if (u_amount < 1e-4) return c;
+  // Coarser size → larger noise cells in pixel space.
+  float cell = mix(1.0, 4.5, u_size);
+  vec2 grid = floor(v_uv / max(u_texel * cell, vec2(1e-5)));
+  float n = hash21(grid) - 0.5;
+  // Slightly stronger in midtones; film grain is less visible in deep black.
+  float y = lumaPS(c);
+  float w = smoothstep(0.02, 0.18, y) * (1.0 - 0.35 * smoothstep(0.75, 1.0, y));
+  return c + n * u_amount * 0.42 * w;
+}`
+
+const NOISE_REDUCTION = `
+uniform vec2 u_texel;
+uniform float u_amount;  // -1..1
+
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+vec3 adjust(vec3 c) {
+  if (abs(u_amount) < 1e-4) return c;
+  if (u_amount > 0.0) {
+    vec2 t = u_texel;
+    vec3 blur =
+        texture(u_src, v_uv + vec2(-t.x, 0.0)).rgb
+      + texture(u_src, v_uv + vec2( t.x, 0.0)).rgb
+      + texture(u_src, v_uv + vec2(0.0, -t.y)).rgb
+      + texture(u_src, v_uv + vec2(0.0,  t.y)).rgb
+      + c;
+    blur *= 0.2;
+    return mix(c, blur, u_amount);
+  }
+  float n = hash21(floor(v_uv / max(u_texel, vec2(1e-5)))) - 0.5;
+  return c + n * (-u_amount) * 0.28;
+}`
+
+const COLOR_CHROME = `
+uniform float u_amount;  // 0..1
+uniform float u_blue;    // 0..1
+
+vec3 adjust(vec3 c) {
+  vec3 o = c;
+  if (u_amount > 1e-4) {
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float chroma = mx - mn;
+    // Push saturated colours toward a denser, less flat look — deepen by
+    // pulling the min channel down a little rather than boosting max.
+    float fac = smoothstep(0.12, 0.55, chroma) * u_amount;
+    float mean = (c.r + c.g + c.b) / 3.0;
+    o = mix(o, mean + (o - mean) * (1.0 + fac * 0.55) - fac * 0.04, fac);
+  }
+  if (u_blue > 1e-4) {
+    // Blue-dominant pixels only (sky / water), matching Color Chrome FX Blue.
+    float blueDom = smoothstep(0.0, 0.2, o.b - max(o.r, o.g) * 0.95);
+    o.b += (o.b - o.r) * u_blue * 0.45 * blueDom;
+    o.g -= u_blue * 0.04 * blueDom;
+  }
+  return o;
+}`
+
 export const FRAG_BODIES: Record<AdjustmentKind, string> = {
   brightnessContrast: BRIGHTNESS_CONTRAST,
   levels: LEVELS,
@@ -496,6 +624,12 @@ export const FRAG_BODIES: Record<AdjustmentKind, string> = {
   colorLookup: COLOR_LOOKUP,
   solidColor: SOLID_COLOR,
   whiteBalance: WHITE_BALANCE,
+  highlightsShadows: HIGHLIGHTS_SHADOWS,
+  clarity: CLARITY,
+  sharpness: SHARPNESS,
+  grain: GRAIN,
+  noiseReduction: NOISE_REDUCTION,
+  colorChrome: COLOR_CHROME,
 }
 
 export function buildFragment(kind: AdjustmentKind): string {

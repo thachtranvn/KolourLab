@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useStore } from '../state/store'
+import { useStore, surroundValue } from '../state/store'
 import type { Renderer } from '../engine/renderer'
 import { cssRgb } from '../engine/color'
+import { HistogramView } from './controls'
+import { SAMPLE_PHOTOS } from './samples'
+
+/** Duration of discrete view tweens (double-tap to fit). */
+const VIEW_TWEEN_MS = 340
+/** Hold still this long on the photo to peek the unedited original. */
+const HOLD_ORIGINAL_MS = 500
 
 /** setPointerCapture throws if the pointer is already gone; never let that kill the gesture. */
 function capture(e: React.PointerEvent) {
@@ -17,12 +24,13 @@ interface Props {
   rendererRef: React.RefObject<Renderer | null>
   onFiles: (files: FileList) => void
   onApplyFix: (id: string) => void
+  onLoadSample: (url: string, name: string) => void
 }
 
 /** Only offer a repair when the evidence is strong; a nag is worse than nothing. */
 const SUGGEST_THRESHOLD = 0.6
 
-export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
+export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix, onLoadSample }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const image = useStore((s) => s.image)
   const zoom = useStore((s) => s.zoom)
@@ -32,8 +40,10 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
   const picking = useStore((s) => s.picking)
   const setZoom = useStore((s) => s.setZoom)
   const setPan = useStore((s) => s.setPan)
+  const setView = useStore((s) => s.setView)
   const setFitZoom = useStore((s) => s.setFitZoom)
   const setSplit = useStore((s) => s.setSplit)
+  const setCompare = useStore((s) => s.setCompare)
 
   const paintMode = useStore((s) => s.painting)
   const brush = useStore((s) => s.brush)
@@ -58,13 +68,155 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
   const dragState = useRef<{ x: number; y: number; pan: [number, number] } | null>(null)
   const splitDrag = useRef(false)
   const strokeRef = useRef(false)
+  /** Active pointers for pinch-zoom (pointerId → client coords). */
+  const pointers = useRef(new Map<number, { x: number; y: number }>())
+  const pinchRef = useRef<{
+    startDist: number
+    startZoom: number
+    startPan: [number, number]
+    startMid: [number, number]
+  } | null>(null)
+  /** Double-tap → fit. Tracks a short stationary tap sequence. */
+  const tapRef = useRef<{
+    downX: number
+    downY: number
+    moved: boolean
+    wasPinch: boolean
+    lastAt: number
+    lastX: number
+    lastY: number
+  }>({ downX: 0, downY: 0, moved: false, wasPinch: false, lastAt: 0, lastX: 0, lastY: 0 })
+  /** Hold-still peek of the original (compare mode 2). */
+  const holdTimer = useRef(0)
+  const holdOriginal = useRef(false)
+  // Live view during a gesture — avoid stale React closures and coalesce
+  // setState so pinch does not queue a store write per touchmove.
+  const viewRef = useRef({ zoom, pan })
+  const pendingView = useRef<{ zoom: number; pan: [number, number] } | null>(null)
+  const viewRaf = useRef(0)
+  const animRaf = useRef(0)
+
+  const cancelViewAnim = useCallback(() => {
+    if (animRaf.current) {
+      cancelAnimationFrame(animRaf.current)
+      animRaf.current = 0
+    }
+  }, [])
+
+  // Keep viewRef in sync with the store when nothing is driving it locally
+  // (gestures / fit animation own the ref while they run).
+  if (!animRaf.current && !viewRaf.current && !dragState.current && !pinchRef.current) {
+    viewRef.current = { zoom, pan }
+  }
+
+  const commitView = useCallback((nextZoom: number, nextPan: [number, number]) => {
+    cancelViewAnim()
+    const z = Math.min(16, Math.max(0.02, nextZoom))
+    pendingView.current = { zoom: z, pan: nextPan }
+    viewRef.current = { zoom: z, pan: nextPan }
+    if (viewRaf.current) return
+    viewRaf.current = requestAnimationFrame(() => {
+      viewRaf.current = 0
+      const v = pendingView.current
+      if (!v) return
+      setView(v.zoom, v.pan)
+    })
+  }, [setView, cancelViewAnim])
+
+  /** Draw the current view straight to the canvas — skips the React hop. */
+  const presentView = useCallback((z: number, p: [number, number]) => {
+    const r = rendererRef.current
+    if (!r?.hasImage) return
+    const s = useStore.getState()
+    r.present({
+      zoom: z,
+      pan: p,
+      compare: s.compare,
+      split: s.split,
+      maskMode: s.maskView,
+      surround: surroundValue(s.surround),
+    })
+  }, [rendererRef])
+
+  /**
+   * Ease zoom/pan to a target. Used for discrete jumps (double-tap fit);
+   * live pinch/drag/wheel stay on commitView so they track the finger 1:1.
+   * Presents every frame directly — going through setState alone used to
+   * retrigger a full layer-stack render and the tween collapsed to one jump.
+   */
+  const animateView = useCallback((nextZoom: number, nextPan: [number, number], ms = VIEW_TWEEN_MS) => {
+    cancelViewAnim()
+    if (viewRaf.current) {
+      cancelAnimationFrame(viewRaf.current)
+      viewRaf.current = 0
+    }
+    const z0 = viewRef.current.zoom
+    const p0: [number, number] = [viewRef.current.pan[0], viewRef.current.pan[1]]
+    const z1 = Math.min(16, Math.max(0.02, nextZoom))
+    const p1: [number, number] = [nextPan[0], nextPan[1]]
+    if (Math.abs(z0 - z1) < 1e-4
+      && Math.abs(p0[0] - p1[0]) < 0.5
+      && Math.abs(p0[1] - p1[1]) < 0.5) {
+      viewRef.current = { zoom: z1, pan: p1 }
+      setView(z1, p1)
+      presentView(z1, p1)
+      return
+    }
+    const t0 = performance.now()
+    const step = (now: number) => {
+      const u = Math.min(1, (now - t0) / ms)
+      const e = 1 - (1 - u) ** 3 // ease-out cubic
+      const z = z0 + (z1 - z0) * e
+      const pan: [number, number] = [
+        p0[0] + (p1[0] - p0[0]) * e,
+        p0[1] + (p1[1] - p0[1]) * e,
+      ]
+      viewRef.current = { zoom: z, pan }
+      pendingView.current = { zoom: z, pan }
+      // GPU first so the motion is visible even if React coalesces setState.
+      presentView(z, pan)
+      setView(z, pan)
+      if (u < 1) animRaf.current = requestAnimationFrame(step)
+      else {
+        animRaf.current = 0
+        viewRef.current = { zoom: z1, pan: p1 }
+        pendingView.current = { zoom: z1, pan: p1 }
+        presentView(z1, p1)
+        setView(z1, p1)
+      }
+    }
+    animRaf.current = requestAnimationFrame(step)
+  }, [setView, cancelViewAnim, presentView])
+
+  /** Reset zoom/pan to the fitted mat — double-tap / double-click. */
+  const resetToFit = useCallback(() => {
+    tapRef.current.lastAt = 0
+    animateView(useStore.getState().fitZoom, [0, 0])
+  }, [animateView])
+
+  const clearHoldOriginal = useCallback(() => {
+    if (holdTimer.current) {
+      window.clearTimeout(holdTimer.current)
+      holdTimer.current = 0
+    }
+    if (holdOriginal.current) {
+      holdOriginal.current = false
+      setCompare(0)
+    }
+  }, [setCompare])
+
+  useEffect(() => () => {
+    if (viewRaf.current) cancelAnimationFrame(viewRaf.current)
+    if (animRaf.current) cancelAnimationFrame(animRaf.current)
+    if (holdTimer.current) window.clearTimeout(holdTimer.current)
+  }, [])
 
   // Fit the image whenever it changes or the viewport resizes.
   const fit = useCallback(() => {
     const wrap = wrapRef.current
     if (!wrap || !image) return
-    // leave a mat around the photo rather than crowding it to the edges
-    const z = Math.min(wrap.clientWidth / image.width, wrap.clientHeight / image.height) * 0.9
+    // Edge-to-edge: fill the viewer on the limiting axis (no mat inset).
+    const z = Math.min(wrap.clientWidth / image.width, wrap.clientHeight / image.height)
     setFitZoom(z)
     return z
   }, [image, setFitZoom])
@@ -108,12 +260,49 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
     return [u, v]
   }
 
+  const beginPinch = (wrap: HTMLElement) => {
+    const pts = [...pointers.current.values()]
+    if (pts.length < 2) return
+    const [a, b] = pts
+    const rect = wrap.getBoundingClientRect()
+    const midX = (a.x + b.x) / 2
+    const midY = (a.y + b.y) / 2
+    const dx = a.x - b.x
+    const dy = a.y - b.y
+    const dist = Math.hypot(dx, dy)
+    if (dist < 8) return
+    const { zoom: z, pan: p } = viewRef.current
+    pinchRef.current = {
+      startDist: dist,
+      startZoom: z,
+      startPan: [p[0], p[1]],
+      startMid: [midX - rect.left - rect.width / 2, midY - rect.top - rect.height / 2],
+    }
+    dragState.current = null
+    strokeRef.current = false
+    tapRef.current.wasPinch = true
+    tapRef.current.lastAt = 0
+    clearHoldOriginal()
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
     // Overlay controls live inside the viewer, and calling setPointerCapture
     // here would redirect the pointerup away from them so their click never
     // fires. Let those handle their own events.
     if ((e.target as HTMLElement).closest?.('.viewer-ui')) return
     if (!image) return
+    // Take over from a running fit tween the moment the user touches.
+    cancelViewAnim()
+    clearHoldOriginal()
+
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+    // Two fingers: pinch / pan the photo. Never paint or split-drag.
+    if (pointers.current.size >= 2) {
+      capture(e)
+      beginPinch(e.currentTarget as HTMLElement)
+      return
+    }
 
     // Painting takes priority over panning; hold Space (or middle-drag) to pan.
     if (painting && selectedId && e.button === 0 && !e.shiftKey) {
@@ -141,21 +330,67 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
     if (compare === 1) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
       const x = (e.clientX - rect.left) / rect.width
-      if (Math.abs(x - split) < 0.03) {
+      // ~44px touch target so the hairline is easy to grab on a phone.
+      const hit = Math.max(0.06, 44 / rect.width)
+      if (Math.abs(x - split) < hit) {
         splitDrag.current = true
         capture(e)
         return
       }
     }
-    dragState.current = { x: e.clientX, y: e.clientY, pan: [...pan] as [number, number] }
+    const { pan: p } = viewRef.current
+    dragState.current = { x: e.clientX, y: e.clientY, pan: [p[0], p[1]] }
+    tapRef.current.downX = e.clientX
+    tapRef.current.downY = e.clientY
+    tapRef.current.moved = false
+    tapRef.current.wasPinch = false
+    // Hold still 1s → peek original. Cancelled if the finger moves or a
+    // second finger joins. Replaces the native long-press select/callout.
+    if (!painting && !picking) {
+      holdTimer.current = window.setTimeout(() => {
+        holdTimer.current = 0
+        if (tapRef.current.moved || tapRef.current.wasPinch) return
+        if (pointers.current.size !== 1) return
+        holdOriginal.current = true
+        dragState.current = null
+        setCompare(2)
+      }, HOLD_ORIGINAL_MS)
+    }
     capture(e)
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (pointers.current.has(e.pointerId)) {
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    }
+
     if (painting) {
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
       setCursor({ x: e.clientX - r.left, y: e.clientY - r.top })
     }
+
+    // Pinch: scale about the gesture midpoint, and let the midpoint drag pan.
+    if (pinchRef.current && pointers.current.size >= 2) {
+      const pts = [...pointers.current.values()]
+      const [a, b] = pts
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      const dist = Math.hypot(a.x - b.x, a.y - b.y)
+      const midX = (a.x + b.x) / 2 - rect.left - rect.width / 2
+      const midY = (a.y + b.y) / 2 - rect.top - rect.height / 2
+      const g = pinchRef.current
+      if (dist >= 8 && g.startDist >= 8) {
+        const next = Math.min(16, Math.max(0.02, g.startZoom * (dist / g.startDist)))
+        const k = next / g.startZoom
+        const mx = g.startMid[0] - g.startPan[0]
+        const my = g.startMid[1] - g.startPan[1]
+        commitView(next, [
+          g.startPan[0] - mx * (k - 1) + (midX - g.startMid[0]),
+          g.startPan[1] - my * (k - 1) + (midY - g.startMid[1]),
+        ])
+      }
+      return
+    }
+
     if (strokeRef.current && selectedId) {
       const uv = toImageUV(e.clientX, e.clientY)
       if (uv) extendStroke(selectedId, uv[0], uv[1])
@@ -166,9 +401,25 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
       setSplit((e.clientX - rect.left) / rect.width)
       return
     }
+    // Peeking the original — stay put until release.
+    if (holdOriginal.current) return
+
     const d = dragState.current
     if (d) {
-      setPan([d.pan[0] + (e.clientX - d.x), d.pan[1] + (e.clientY - d.y)])
+      if (!tapRef.current.moved) {
+        const moved = Math.hypot(e.clientX - tapRef.current.downX, e.clientY - tapRef.current.downY)
+        if (moved > 12) {
+          tapRef.current.moved = true
+          if (holdTimer.current) {
+            window.clearTimeout(holdTimer.current)
+            holdTimer.current = 0
+          }
+        }
+      }
+      commitView(viewRef.current.zoom, [
+        d.pan[0] + (e.clientX - d.x),
+        d.pan[1] + (e.clientY - d.y),
+      ])
       return
     }
     if (picking) {
@@ -177,25 +428,79 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
     }
   }
 
-  const endDrag = () => {
+  const endDrag = (e?: React.PointerEvent) => {
+    if (e) pointers.current.delete(e.pointerId)
+    else pointers.current.clear()
+
+    if (pointers.current.size >= 2 && wrapRef.current) {
+      beginPinch(wrapRef.current)
+      return
+    }
+    if (pointers.current.size === 1) {
+      // Dropped out of a pinch into one finger — continue as a pan.
+      pinchRef.current = null
+      const [pt] = pointers.current.values()
+      const { pan: p } = viewRef.current
+      dragState.current = { x: pt.x, y: pt.y, pan: [p[0], p[1]] }
+      tapRef.current.wasPinch = true
+      return
+    }
+
+    // Held long enough to peek original — release restores the edit, no tap.
+    if (holdTimer.current) {
+      window.clearTimeout(holdTimer.current)
+      holdTimer.current = 0
+    }
+    if (holdOriginal.current) {
+      holdOriginal.current = false
+      setCompare(0)
+      tapRef.current.lastAt = 0
+      dragState.current = null
+      splitDrag.current = false
+      strokeRef.current = false
+      pinchRef.current = null
+      return
+    }
+
+    // Double-tap to fit: two quick, nearly stationary taps with one finger.
+    const tap = tapRef.current
+    const canTap = !!e && !tap.moved && !tap.wasPinch && !strokeRef.current
+      && !splitDrag.current && !painting && !picking && !!image
+    if (canTap) {
+      const now = performance.now()
+      const dt = now - tap.lastAt
+      const dist = Math.hypot(e.clientX - tap.lastX, e.clientY - tap.lastY)
+      if (dt > 0 && dt < 320 && dist < 48) {
+        resetToFit()
+      } else {
+        tap.lastAt = now
+        tap.lastX = e.clientX
+        tap.lastY = e.clientY
+      }
+    } else {
+      tap.lastAt = 0
+    }
+
     dragState.current = null
     splitDrag.current = false
     strokeRef.current = false
+    pinchRef.current = null
   }
 
   const onWheel = (e: React.WheelEvent) => {
     if (!image) return
     const canvas = canvasRef.current
     if (!canvas) return
+    cancelViewAnim()
     const rect = canvas.getBoundingClientRect()
+    const { zoom: z, pan: p } = viewRef.current
     // keep the point under the cursor anchored while zooming
-    const mx = e.clientX - rect.left - rect.width / 2 - pan[0]
-    const my = e.clientY - rect.top - rect.height / 2 - pan[1]
+    const mx = e.clientX - rect.left - rect.width / 2 - p[0]
+    const my = e.clientY - rect.top - rect.height / 2 - p[1]
     const factor = Math.exp(-e.deltaY * 0.0015)
-    const next = Math.min(16, Math.max(0.02, zoom * factor))
-    const k = next / zoom
-    setZoom(next)
-    setPan([pan[0] - mx * (k - 1), pan[1] - my * (k - 1)])
+    const next = Math.min(16, Math.max(0.02, z * factor))
+    const k = next / z
+    commitView(next, [p[0] - mx * (k - 1), p[1] - my * (k - 1)])
   }
 
   return (
@@ -214,6 +519,13 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onContextMenu={(e) => e.preventDefault()}
+      onDoubleClick={(e) => {
+        if ((e.target as HTMLElement).closest?.('.viewer-ui')) return
+        if (!image || painting || picking) return
+        e.preventDefault()
+        resetToFit()
+      }}
       onWheel={onWheel}
     >
       <canvas ref={canvasRef} className="gl-canvas" />
@@ -223,6 +535,21 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
           <div className="empty-card">
             <h2>Drop a photo to begin</h2>
             <p>JPEG, PNG, WebP or AVIF. Everything runs locally on your GPU — nothing is uploaded.</p>
+            <div className="sample-strip" role="list">
+              {SAMPLE_PHOTOS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  role="listitem"
+                  className="sample-thumb"
+                  title={s.hint}
+                  onClick={(e) => { e.stopPropagation(); onLoadSample(s.url, `${s.id}.jpg`) }}
+                >
+                  <img src={s.url} alt="" />
+                  <span>{s.name}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -268,8 +595,14 @@ export function Viewer({ canvasRef, rendererRef, onFiles, onApplyFix }: Props) {
 
       {image && compare === 1 && (
         <div className="split-labels">
-          <span style={{ left: 0, width: `${split * 100}%` }}>Before</span>
-          <span style={{ left: `${split * 100}%`, right: 0 }}>After</span>
+          <span className="before">Before</span>
+          <span className="after">After</span>
+        </div>
+      )}
+
+      {image && compare === 0 && !painting && !picking && (
+        <div className="mini-hist" aria-hidden>
+          <HistogramView height={36} />
         </div>
       )}
     </div>

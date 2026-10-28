@@ -6,9 +6,10 @@ import { LOOK_PRESETS } from '../engine/presets'
 import { FIXES } from '../engine/fixes'
 import { AdjustmentPanel } from './panels'
 import { MaskPanel } from './MaskPanel'
+import { FujiRecipePanel } from './FujiRecipe'
 import { Slider } from './controls'
 
-const GROUP_ORDER = ['Light & Contrast', 'Colour & Hue', 'Advanced'] as const
+const GROUP_ORDER = ['Light & Contrast', 'Colour & Hue', 'Detail', 'Advanced'] as const
 
 const blendLabel = (b: BlendMode) =>
   b.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())
@@ -24,7 +25,7 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
   const hasImage = useStore((s) => s.image !== null)
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number; sheet: boolean } | null>(null)
-  const [tab, setTab] = useState<'fixes' | 'tools' | 'looks'>('tools')
+  const [tab, setTab] = useState<'fixes' | 'tools' | 'looks' | 'fuji'>('tools')
   const kinds = Object.keys(ADJUSTMENT_META) as AdjustmentKind[]
   const suggestions = useStore((s) => s.suggestions)
   const confidenceOf = (id: string) => suggestions.find((s) => s.id === id)?.confidence ?? 0
@@ -44,15 +45,16 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
         })
         return
       }
-      const width = 300
+      const width = tab === 'fuji' ? 340 : 300
       const below = window.innerHeight - a.bottom - margin
       const above = a.top - margin
       // open downward when there is room, otherwise flip up
       const openDown = below >= 260 || below >= above
+      const cap = tab === 'fuji' ? 640 : 520
       setPos({
         left: Math.max(margin, Math.min(a.right - width, window.innerWidth - width - margin)),
-        top: openDown ? a.bottom + 6 : Math.max(margin, a.top - 6 - Math.min(above, 520)),
-        maxHeight: Math.max(200, Math.min(520, openDown ? below : above)),
+        top: openDown ? a.bottom + 6 : Math.max(margin, a.top - 6 - Math.min(above, cap)),
+        maxHeight: Math.max(200, Math.min(cap, openDown ? below : above)),
         sheet: false,
       })
     }
@@ -63,7 +65,7 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [anchor])
+  }, [anchor, tab])
 
   // close on outside click or Escape — never on mouse-leave, which made the
   // menu impossible to scroll
@@ -84,7 +86,7 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
 
   return createPortal(
     <div
-      className={`add-menu ${pos.sheet ? 'sheet' : ''}`}
+      className={`add-menu ${pos.sheet ? 'sheet' : ''} ${tab === 'fuji' ? 'fuji-open' : ''}`}
       ref={ref}
       style={pos.sheet
         ? { left: pos.left, right: pos.left, top: pos.top, maxHeight: pos.maxHeight, width: 'auto' }
@@ -96,56 +98,61 @@ function AddMenu({ anchor, onClose, onFix }: { anchor: HTMLElement; onClose: () 
         </button>
         <button className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>Adjustments</button>
         <button className={tab === 'looks' ? 'active' : ''} onClick={() => setTab('looks')}>Looks</button>
+        <button className={tab === 'fuji' ? 'active' : ''} onClick={() => setTab('fuji')}>Fuji</button>
       </div>
 
-      <div className="add-scroll">
-        {tab === 'fixes' && (
-          <div className="add-group">
-            {FIXES.map((f) => {
-              const c = confidenceOf(f.id)
-              return (
-                <button key={f.id} disabled={!hasImage} onClick={() => { onFix(f.id); onClose() }}>
-                  <span className="add-name">
-                    {f.name}
-                    {c > 0 && <span className="confidence">{Math.round(c * 100)}% match</span>}
-                  </span>
-                  <span className="add-hint">
-                    {suggestions.find((s) => s.id === f.id)?.explanation ?? f.description}
-                  </span>
+      {tab === 'fuji' ? (
+        <FujiRecipePanel onClose={onClose} />
+      ) : (
+        <div className="add-scroll">
+          {tab === 'fixes' && (
+            <div className="add-group">
+              {FIXES.map((f) => {
+                const c = confidenceOf(f.id)
+                return (
+                  <button key={f.id} disabled={!hasImage} onClick={() => { onFix(f.id); onClose() }}>
+                    <span className="add-name">
+                      {f.name}
+                      {c > 0 && <span className="confidence">{Math.round(c * 100)}% match</span>}
+                    </span>
+                    <span className="add-hint">
+                      {suggestions.find((s) => s.id === f.id)?.explanation ?? f.description}
+                    </span>
+                  </button>
+                )
+              })}
+              <p className="hint">
+                A fix measures the photo and configures itself, so the same one works
+                on any image — unlike a look, which stores fixed values.
+              </p>
+            </div>
+          )}
+
+          {tab === 'tools' && GROUP_ORDER.map((group) => (
+            <div key={group} className="add-group">
+              <div className="add-group-title">{group}</div>
+              {kinds.filter((k) => ADJUSTMENT_META[k].group === group).map((k) => (
+                <button key={k} onClick={() => { addLayer(k); onClose() }}>
+                  <span className="add-name">{ADJUSTMENT_META[k].label}</span>
+                  <span className="add-hint">{ADJUSTMENT_META[k].hint}</span>
                 </button>
-              )
-            })}
-            <p className="hint">
-              A fix measures the photo and configures itself, so the same one works
-              on any image — unlike a look, which stores fixed values.
-            </p>
-          </div>
-        )}
+              ))}
+            </div>
+          ))}
 
-        {tab === 'tools' && GROUP_ORDER.map((group) => (
-          <div key={group} className="add-group">
-            <div className="add-group-title">{group}</div>
-            {kinds.filter((k) => ADJUSTMENT_META[k].group === group).map((k) => (
-              <button key={k} onClick={() => { addLayer(k); onClose() }}>
-                <span className="add-name">{ADJUSTMENT_META[k].label}</span>
-                <span className="add-hint">{ADJUSTMENT_META[k].hint}</span>
-              </button>
-            ))}
-          </div>
-        ))}
-
-        {tab === 'looks' && (
-          <div className="add-group">
-            {LOOK_PRESETS.map((l) => (
-              <button key={l.name} disabled={!hasImage} onClick={() => { applyLook(l.build()); onClose() }}>
-                <span className="add-name">{l.name}</span>
-                <span className="add-hint">{l.description}</span>
-              </button>
-            ))}
-            <p className="hint">Looks add a ready-made stack of layers you can then tweak or delete.</p>
-          </div>
-        )}
-      </div>
+          {tab === 'looks' && (
+            <div className="add-group">
+              {LOOK_PRESETS.map((l) => (
+                <button key={l.name} disabled={!hasImage} onClick={() => { applyLook(l.build()); onClose() }}>
+                  <span className="add-name">{l.name}</span>
+                  <span className="add-hint">{l.description}</span>
+                </button>
+              ))}
+              <p className="hint">Looks add a ready-made stack of layers you can then tweak or delete.</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>,
     document.body,
   )
@@ -241,8 +248,8 @@ export function LayerStack({ onFix, thumbs }: { onFix: (id: string) => void; thu
       <div className="layer-list">
         {display.length === 0 && (
           <p className="empty-note">
-            No adjustments yet. Use <strong>+ Add</strong> for a single tool, or
-            the Looks tab to start from a ready-made stack.
+            No adjustments yet. Use <strong>+ Add</strong> for a tool, a Look, or
+            the Fuji recipe panel.
           </p>
         )}
         {display.map((l, row) => (

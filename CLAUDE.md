@@ -48,8 +48,9 @@ and are worse evidence. A grade that looked fine to the eye once measured
   being nowhere near dark. Pick the one that matches the question you are
   asking.
 
-To load a local file, copy it into `public/` (Playwright is sandboxed to the
-repo) and fetch it by URL. Delete it afterwards — `public/` is not committed.
+To load a local file for a one-off drive, copy it into `public/` (Playwright is
+sandboxed to the repo) and fetch it by URL, then delete it. Built-in samples
+live in `public/samples/` and are meant to stay.
 
 ## Further notes
 
@@ -143,11 +144,10 @@ npx vercel --prod
 Or link the GitHub repo in the Vercel dashboard for automatic deploys on push.
 A static bundle — four files, no server, no build step on the host.
 
-**Empty `public/` before building.** Vite copies it into `dist` verbatim, and
-this is the same directory used to stage test photos for driving the app. A
-deploy run mid-session would have published a personal photo and a third party's
-watermarked tutorial screenshots. `find dist -type f` before deploying: it should
-list `index.html` and the `assets/` bundle, nothing else.
+**Clear staged junk from `public/` before building**, but keep `public/samples/`.
+Vite copies `public/` into `dist` verbatim — a mid-session drive photo or a
+watermarked tutorial screenshot must not ship. `find dist -type f` before
+deploying: `index.html`, `assets/`, and `samples/` only.
 
 First use of a segmented mask downloads ~28MB of runtime and weights from the
 CDN. Measured on the deployed site that is **~30s cold**, then 1ms for the same
@@ -156,5 +156,6 @@ fetched until one of those masks is used, so the rest of the app is unaffected.
 
 ## Housekeeping
 
-Clean up `public/`, `dist/`, `.playwright-mcp/` and stray screenshots before
-committing. Commit messages explain *why*, and state what was verified.
+Clean up staged junk in `public/` (keep `samples/`), plus `dist/`,
+`.playwright-mcp/` and stray screenshots before committing. Commit messages
+explain *why*, and state what was verified.

@@ -88,6 +88,8 @@ interface State {
   chromeHidden: boolean
 
   setImage: (info: ImageInfo) => void
+  /** Leave edit mode — drop the photo, layers and history. */
+  clearDocument: () => void
   addLayer: (kind: AdjustmentKind) => void
   removeLayer: (id: string) => void
   duplicateLayer: (id: string) => void
@@ -114,6 +116,8 @@ interface State {
   setFitZoom: (z: number) => void
   zoomToFit: () => void
   setPan: (p: [number, number]) => void
+  /** Atomic zoom+pan write — one notify for animated view tweens. */
+  setView: (zoom: number, pan: [number, number]) => void
   setCompare: (c: CompareMode) => void
   setSplit: (s: number) => void
   toggleHistogram: () => void
@@ -160,6 +164,29 @@ export const useStore = create<State>((set, get) => ({
 
   // a new photo gets a fresh diagnosis
   setImage: (info) => set({ image: info, pan: [0, 0], compare: 0, suggestions: [], dismissed: [] }),
+
+  clearDocument: () => set((s) => {
+    try { s.image?.full.close() } catch { /* already closed */ }
+    try { s.image?.preview.close() } catch { /* already closed */ }
+    return {
+      image: null,
+      layers: [],
+      selectedId: null,
+      past: [],
+      future: [],
+      zoom: 1,
+      fitZoom: 1,
+      pan: [0, 0] as [number, number],
+      compare: 0 as const,
+      split: 0.5,
+      suggestions: [],
+      dismissed: [],
+      peek: null,
+      painting: false,
+      picking: null,
+      maskView: 0 as const,
+    }
+  }),
 
   addLayer: (kind) => {
     const layer = makeLayer(kind)
@@ -326,6 +353,10 @@ export const useStore = create<State>((set, get) => ({
   setFitZoom: (z) => set({ fitZoom: z }),
   zoomToFit: () => set((s) => ({ zoom: s.fitZoom, pan: [0, 0] })),
   setPan: (p) => set({ pan: p }),
+  setView: (zoom, pan) => set({
+    zoom: Math.min(16, Math.max(0.02, zoom)),
+    pan,
+  }),
   setCompare: (c) => set({ compare: c }),
   setSplit: (v) => set({ split: Math.min(1, Math.max(0, v)) }),
   toggleHistogram: () => set((s) => ({ showHistogram: !s.showHistogram })),

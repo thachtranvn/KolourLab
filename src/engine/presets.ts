@@ -174,9 +174,78 @@ const LOOK_FNS: Record<string, LookFn> = {
     const v = clamp01(mixv(l, l * l * (3 - 2 * l), 0.45))
     return [v, v, v]
   },
+
+  // Fuji film simulations — relative character only, not camera JPEGs.
+  // Each is {sat, contrast, warm} expanded into a 3D LUT the Color Lookup pass
+  // can apply; the Fuji recipe panel addresses them by these exact names.
+  'Fuji · PROVIA': (c) => sat(contrastS(c, 0.05), 1.0),
+  'Fuji · ASTIA': (c) => {
+    let o = sat(c, 0.88)
+    o = contrastS(o, -0.07)
+    return gain(o, [1.02, 1.0, 0.97])
+  },
+  'Fuji · VELVIA': (c) => {
+    let o = sat(c, 1.25)
+    o = contrastS(o, 0.18)
+    return gain(o, [1.03, 1.0, 0.96])
+  },
+  'Fuji · Classic Chrome': (c) => {
+    let o = sat(c, 0.78)
+    o = contrastS(o, 0.14)
+    o = splitTone(o, [0.42, 0.48, 0.48], [0.58, 0.54, 0.48], 0.35)
+    return gain(o, [1.02, 1.0, 0.96])
+  },
+  'Fuji · Classic Negative': (c) => {
+    let o = sat(c, 0.9)
+    o = contrastS(o, 0.28)
+    return gain(o, [0.99, 1.0, 1.02])
+  },
+  'Fuji · PRO Neg Hi': (c) => {
+    let o = sat(c, 0.9)
+    o = contrastS(o, 0.14)
+    return gain(o, [1.01, 1.0, 0.98])
+  },
+  'Fuji · PRO Neg Std': (c) => {
+    let o = sat(c, 0.84)
+    o = contrastS(o, -0.08)
+    return gain(o, [1.03, 1.0, 0.96])
+  },
+  'Fuji · ETERNA': (c) => {
+    let o = sat(c, 0.75)
+    o = contrastS(o, -0.1)
+    o = lift(o, [0.01, 0.01, 0.015])
+    return o
+  },
+  'Fuji · Bleach Bypass': (c) => sat(contrastS(c, 0.35), 0.52),
+  'Fuji · ACROS': (c) => {
+    const l = clamp01(mixv(luma(c), luma(c) * luma(c) * (3 - 2 * luma(c)), 0.2) * 1.02)
+    return [l, l, l]
+  },
+  'Fuji · Monochrome': (c) => {
+    const l = luma(c)
+    return [l, l, l]
+  },
+  'Fuji · Nostalgic Neg': (c) => {
+    let o = sat(c, 0.89)
+    o = contrastS(o, 0.04)
+    o = gain(o, [1.06, 1.01, 0.92])
+    o = lift(o, [0.02, 0.01, 0.0])
+    return o
+  },
+  'Fuji · Reala ACE': (c) => {
+    let o = sat(c, 0.98)
+    o = contrastS(o, 0.12)
+    return gain(o, [1.02, 1.0, 0.97])
+  },
 }
 
 export const LUT_PRESET_NAMES = Object.keys(LOOK_FNS)
+
+/** Apply a named Look to one sRGB colour — same function the LUT cube is baked from. */
+export function applyLook(name: string, c: RGB): RGB {
+  const fn = LOOK_FNS[name]
+  return fn ? fn(c) : c
+}
 
 const cubeCache = new Map<string, Cube>()
 

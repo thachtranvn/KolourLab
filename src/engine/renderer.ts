@@ -13,6 +13,8 @@ import type {
   HueSaturationParams, ColorBalanceParams, SelectiveColorParams, ReplaceColorParams,
   BlackWhiteParams, ChannelMixerParams, PhotoFilterParams, GradientMapParams,
   ColorLookupParams, SolidColorParams, WhiteBalanceParams, SelectiveColorKey, HueRangeKey,
+  HighlightsShadowsParams, ClarityParams, SharpnessParams, GrainParams,
+  NoiseReductionParams, ColorChromeParams,
 } from '../state/types'
 
 // ---------------------------------------------------------------------------
@@ -336,6 +338,19 @@ export class Renderer {
   get hasImage() { return this.previewTex !== null }
   get originalTexture() { return this.previewTex }
 
+  /** Drop the current photo so the canvas returns to an empty mat. */
+  clearImage() {
+    const gl = this.gl
+    if (this.fullTex) { gl.deleteTexture(this.fullTex); this.fullTex = null }
+    if (this.previewTex) { gl.deleteTexture(this.previewTex); this.previewTex = null }
+    this.fullSize = [0, 0]
+    this.previewSize = [0, 0]
+    this.pickData = null
+    this.lastResult = null
+    this.freeTarget(this.ping); this.ping = null
+    this.freeTarget(this.pong); this.pong = null
+  }
+
   /** Sample the untouched source colour at image-space coordinates (0..1). */
   pick(u: number, v: number): [number, number, number] | null {
     const d = this.pickData
@@ -617,6 +632,9 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, mask ? mask.tex : this.whiteTex!)
     prog.i('u_mask', MASK_UNIT)
     prog.b('u_useMask', mask !== null)
+    // Neighbourhood adjustments (clarity, sharpness, grain, NR) sample by texel.
+    // Harmless for the rest — unused uniforms are ignored.
+    prog.v2('u_texel', 1 / dst.w, 1 / dst.h)
 
     this.setParamUniforms(prog, layer)
     this.drawQuad()
@@ -777,6 +795,43 @@ export class Renderer {
         prog.f('u_lutSize', size)
         prog.f('u_amount', p.amount / 100)
         break
+      }
+      case 'highlightsShadows': {
+        const p = layer.params as HighlightsShadowsParams
+        prog.f('u_highlights', p.highlights / 100)
+        prog.f('u_shadows', p.shadows / 100)
+        break
+      }
+      case 'clarity': {
+        const p = layer.params as ClarityParams
+        prog.f('u_amount', p.amount / 100)
+        break
+      }
+      case 'sharpness': {
+        const p = layer.params as SharpnessParams
+        prog.f('u_amount', p.amount / 100)
+        break
+      }
+      case 'grain': {
+        const p = layer.params as GrainParams
+        prog.f('u_amount', p.amount / 100)
+        prog.f('u_size', p.size / 100)
+        break
+      }
+      case 'noiseReduction': {
+        const p = layer.params as NoiseReductionParams
+        prog.f('u_amount', p.amount / 100)
+        break
+      }
+      case 'colorChrome': {
+        const p = layer.params as ColorChromeParams
+        prog.f('u_amount', p.amount / 100)
+        prog.f('u_blue', p.blue / 100)
+        break
+      }
+      default: {
+        const _exhaustive: never = layer.kind
+        void _exhaustive
       }
     }
   }

@@ -5,21 +5,24 @@ import { useStore, surroundValue, SURROUNDS } from '../state/store'
 import { HistogramContext, HistogramView } from './controls'
 import { Viewer } from './Viewer'
 import { LayerStack } from './LayerStack'
+import { MobileDock } from './MobileDock'
 import { SegmentContext } from './MaskPanel'
 import { makeSampleImage } from './sample'
+import { SAMPLE_PHOTOS } from './samples'
 import { colourlab, setApiRenderer, notifyRendered, markRenderPending, abortPendingFrames, ensureMasksReady } from '../api'
 import type { Layer } from '../state/types'
 
 /**
- * Overflow for secondary chrome. The topbar stays one row — Open, undo/redo,
- * hold-to-compare, Export — and everything else lives behind ⋯.
+ * Overflow for secondary chrome. The topbar stays one row — Open/Back,
+ * undo/redo, compare, Export — and everything else lives behind ⋯.
  */
 function MoreMenu({
-  anchor, onClose, onSample, onExportPng, onImportRecipe, onExportRecipe,
+  anchor, onClose, onOpen, onLoadSample, onExportPng, onImportRecipe, onExportRecipe,
 }: {
   anchor: HTMLElement
   onClose: () => void
-  onSample: () => void
+  onOpen: () => void
+  onLoadSample: (url: string, name: string) => void
   onExportPng: () => void
   onImportRecipe: () => void
   onExportRecipe: () => void
@@ -69,8 +72,33 @@ function MoreMenu({
 
   return createPortal(
     <div className="more-menu" ref={ref} style={{ left: pos.left, top: pos.top }} role="menu">
-      <button type="button" role="menuitem" onClick={() => { onSample(); onClose() }}>
-        Load sample image
+      {image && (
+        <>
+          <button type="button" role="menuitem" onClick={() => { onOpen(); onClose() }}>
+            Open image…
+          </button>
+          <div className="more-sep" />
+        </>
+      )}
+      <div className="more-label">Samples</div>
+      {SAMPLE_PHOTOS.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          role="menuitem"
+          onClick={() => { onLoadSample(s.url, `${s.id}.jpg`); onClose() }}
+        >
+          {s.name}
+          <span className="more-hint">{s.hint}</span>
+        </button>
+      ))}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => { onLoadSample('synthetic', 'sample.png'); onClose() }}
+      >
+        Synthetic chart
+        <span className="more-hint">Hue ramp, skin, clipped highlights</span>
       </button>
       <button
         type="button"
@@ -136,7 +164,7 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const recipeRef = useRef<HTMLInputElement>(null)
   const rafRef = useRef(0)
-  const histTimer = useRef<number | undefined>(undefined)
+  const presentRafRef = useRef(0)
   const thumbTimer = useRef<number | undefined>(undefined)
 
   const [ready, setReady] = useState(false)
@@ -181,6 +209,7 @@ export default function App() {
   const redo = useStore((s) => s.redo)
   const setPicking = useStore((s) => s.setPicking)
   const loadRecipe = useStore((s) => s.loadRecipe)
+  const clearDocument = useStore((s) => s.clearDocument)
 
   const flash = useCallback((msg: string) => {
     setToast(msg)
@@ -273,6 +302,23 @@ export default function App() {
     loadSource(file, file.name)
   }, [loadSource, flash])
 
+  const loadSample = useCallback(async (url: string, name: string) => {
+    if (url === 'synthetic') {
+      await loadSource(makeSampleImage(), name)
+      return
+    }
+    setBusy('Loading sample…')
+    try {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`Could not load ${name}`)
+      await colourlab.open(await res.blob(), name)
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Could not load that sample.')
+    } finally {
+      setBusy(null)
+    }
+  }, [loadSource, flash])
+
   // A hovered row can vanish under the cursor — undo, delete, a recipe load —
   // and React fires no mouseleave for a node that was removed. A stale peek id
   // both freezes thumbnail regeneration and hides a layer whose row still
@@ -282,10 +328,10 @@ export default function App() {
   }, [layers, peek])
 
   // --- render loop --------------------------------------------------------
+  // Stack pass only when the document changes. Zoom/pan used to retrigger a
+  // full GPU stack every frame, which made fit tweens look like a single jump.
   useEffect(() => {
     if (!ready) return
-    // Tell the API a frame is on its way, so anything waiting on current
-    // pixels knows to wait — and, just as importantly, knows when not to.
     markRenderPending()
     cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(() => {
@@ -293,21 +339,40 @@ export default function App() {
       if (!r) return
       r.pruneCaches(new Set(layers.map((l) => l.id)))
       r.maskViewLayerId = maskView ? selectedId : null
-      // hovering a thumbnail switches that layer off in the preview only
       const shown = peek
         ? layers.map((l) => (l.id === peek ? { ...l, enabled: false } : l))
         : layers
       r.render(shown)
-      r.present({ zoom, pan, compare, split, maskMode: maskView, surround: surroundLevel })
+      // Live store read — a concurrent fit tween must not be stomped by the
+      // zoom/pan captured when this stack pass was scheduled.
+      const s = useStore.getState()
+      r.present({
+        zoom: s.zoom,
+        pan: s.pan,
+        compare: s.compare,
+        split: s.split,
+        maskMode: s.maskView,
+        surround: surroundValue(s.surround),
+      })
       notifyRendered()
-
-      window.clearTimeout(histTimer.current)
-      histTimer.current = window.setTimeout(() => {
-        setHist(rendererRef.current?.histogram() ?? null)
-      }, 90)
+      // Same frame as the photo — a debounce here made the mini hist lag a
+      // full beat behind the slider. Readback is cheap at thumbnail size.
+      setHist(r.histogram())
     })
     return () => cancelAnimationFrame(rafRef.current)
-  }, [ready, glEpoch, segEpoch, layers, image, zoom, pan, compare, split, maskView, selectedId, surroundLevel, peek])
+  }, [ready, glEpoch, segEpoch, layers, image, maskView, selectedId, peek])
+
+  // Present-only: cheap compositing when the view (or compare chrome) moves.
+  useEffect(() => {
+    if (!ready) return
+    cancelAnimationFrame(presentRafRef.current)
+    presentRafRef.current = requestAnimationFrame(() => {
+      const r = rendererRef.current
+      if (!r?.hasImage) return
+      r.present({ zoom, pan, compare, split, maskMode: maskView, surround: surroundLevel })
+    })
+    return () => cancelAnimationFrame(presentRafRef.current)
+  }, [ready, glEpoch, zoom, pan, compare, split, maskView, surroundLevel])
 
   // A segmented mask needs an inference before it can sample anything, and the
   // render loop is synchronous. Run it beside the loop and bump an epoch when
@@ -461,24 +526,50 @@ export default function App() {
     <HistogramContext.Provider value={hist}>
       <div className={`app ${chromeHidden ? 'chrome-hidden' : ''}`}>
         <header className="topbar">
-          <div className="brand" title="Colour Lab">
-            <span className="logo">◐</span>
-            <span className="brand-name">Colour Lab</span>
-          </div>
-
           <input ref={fileRef} type="file" accept="image/*" hidden
             onChange={(e) => { if (e.target.files?.length) onFiles(e.target.files); e.target.value = '' }} />
           <input ref={recipeRef} type="file" accept="application/json" hidden
             onChange={(e) => { const f = e.target.files?.[0]; if (f) importRecipe(f); e.target.value = '' }} />
 
           <div className="topbar-group">
-            <button className="btn" onClick={() => fileRef.current?.click()} title="Open image">
-              Open
-            </button>
-            <button className="btn icon" onClick={undo} title="Undo (⌘Z)" aria-label="Undo">↶</button>
-            <button className="btn icon" onClick={redo} title="Redo (⇧⌘Z)" aria-label="Redo">↷</button>
+            {image ? (
+              <button
+                className="btn icon"
+                title="Back"
+                aria-label="Back"
+                onClick={() => {
+                  const dirty = useStore.getState().layers.length > 0
+                  if (dirty && !window.confirm('Discard edits and go back?\nYour adjustments will be lost.')) {
+                    return
+                  }
+                  rendererRef.current?.clearImage()
+                  clearDocument()
+                  setHist(null)
+                  setThumbs([])
+                }}
+              >
+                ←
+              </button>
+            ) : (
+              <button className="btn" onClick={() => fileRef.current?.click()} title="Open image">
+                Open
+              </button>
+            )}
+            <button className="btn icon" disabled={!image} onClick={undo} title="Undo (⌘Z)" aria-label="Undo">↶</button>
+            <button className="btn icon" disabled={!image} onClick={redo} title="Redo (⇧⌘Z)" aria-label="Redo">↷</button>
+            {image && (
+              <button
+                className={`btn icon ${compare === 1 ? 'active' : ''}`}
+                title="Compare before / after"
+                aria-label="Compare before and after"
+                aria-pressed={compare === 1}
+                onClick={() => setCompare(compare === 1 ? 0 : 1)}
+              >
+                ⟷
+              </button>
+            )}
             <button
-              className={`btn ${compare === 2 ? 'active' : ''}`}
+              className={`btn hold-before ${compare === 2 ? 'active' : ''}`}
               disabled={!image}
               onPointerDown={(e) => { e.preventDefault(); setCompare(2) }}
               onPointerUp={() => setCompare(0)}
@@ -516,7 +607,8 @@ export default function App() {
               <MoreMenu
                 anchor={moreBtnRef.current}
                 onClose={() => setMoreOpen(false)}
-                onSample={() => { void loadSource(makeSampleImage(), 'sample.png') }}
+                onOpen={() => fileRef.current?.click()}
+                onLoadSample={(url, name) => { void loadSample(url, name) }}
                 onExportPng={() => { void exportImage('image/png') }}
                 onImportRecipe={() => recipeRef.current?.click()}
                 onExportRecipe={exportRecipe}
@@ -526,7 +618,16 @@ export default function App() {
         </header>
 
         <main className="main">
-          <Viewer canvasRef={canvasRef} rendererRef={rendererRef} onFiles={onFiles} onApplyFix={applyFix} />
+          <Viewer
+            canvasRef={canvasRef}
+            rendererRef={rendererRef}
+            onFiles={onFiles}
+            onApplyFix={applyFix}
+            onLoadSample={(url, name) => { void loadSample(url, name) }}
+          />
+
+          {/* Mobile: VSCO dock. Desktop: sidebar + layers. Same document. */}
+          <MobileDock onFix={applyFix} />
 
           <aside className="sidebar">
             {showHistogram && (

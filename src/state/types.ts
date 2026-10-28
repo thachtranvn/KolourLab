@@ -23,6 +23,12 @@ export type AdjustmentKind =
   | 'colorLookup'
   | 'solidColor'
   | 'whiteBalance'
+  | 'highlightsShadows'
+  | 'clarity'
+  | 'sharpness'
+  | 'grain'
+  | 'noiseReduction'
+  | 'colorChrome'
 
 export type BlendMode =
   | 'normal'
@@ -207,6 +213,50 @@ export interface WhiteBalanceParams {
   preserveLuminosity: boolean
 }
 
+/** Lift or crush the ends of the tone scale — Fuji Highlight / Shadow. */
+export interface HighlightsShadowsParams {
+  /** -100 darken .. +100 brighten the bright end */
+  highlights: number
+  /** -100 crush .. +100 lift the dark end */
+  shadows: number
+}
+
+/** Midtone local contrast (unsharp on a soft neighbourhood). */
+export interface ClarityParams {
+  amount: number // -100..100
+}
+
+/** Fine-detail unsharp mask. */
+export interface SharpnessParams {
+  amount: number // -100..100
+}
+
+/** Aesthetic film grain — not sensor noise. */
+export interface GrainParams {
+  amount: number // 0..100
+  /** 0 = fine, 100 = coarse clumps */
+  size: number
+}
+
+/**
+ * Positive softens fine noise toward a neighbourhood average; negative adds
+ * grain-like texture. Coarse approximation of in-camera High ISO NR.
+ */
+export interface NoiseReductionParams {
+  amount: number // -100..100
+}
+
+/**
+ * Deepen already-saturated colours without a global saturation push, plus a
+ * blue-only variant (Fuji Color Chrome / Color Chrome FX Blue).
+ */
+export interface ColorChromeParams {
+  /** 0..100 — reds, oranges, yellows, greens */
+  amount: number
+  /** 0..100 — blue-dominant pixels only */
+  blue: number
+}
+
 export type ParamsFor<K extends AdjustmentKind> =
   K extends 'brightnessContrast' ? BrightnessContrastParams :
   K extends 'levels' ? LevelsParams :
@@ -224,6 +274,12 @@ export type ParamsFor<K extends AdjustmentKind> =
   K extends 'colorLookup' ? ColorLookupParams :
   K extends 'solidColor' ? SolidColorParams :
   K extends 'whiteBalance' ? WhiteBalanceParams :
+  K extends 'highlightsShadows' ? HighlightsShadowsParams :
+  K extends 'clarity' ? ClarityParams :
+  K extends 'sharpness' ? SharpnessParams :
+  K extends 'grain' ? GrainParams :
+  K extends 'noiseReduction' ? NoiseReductionParams :
+  K extends 'colorChrome' ? ColorChromeParams :
   never
 
 // ---------------------------------------------------------------------------
@@ -410,7 +466,13 @@ export const ADJUSTMENT_META: Record<AdjustmentKind, { label: string; group: str
   gradientMap:        { label: 'Gradient Map',        group: 'Advanced',         hint: 'Map tones onto a colour ramp' },
   colorLookup:        { label: 'Color Lookup',        group: 'Advanced',         hint: 'Apply a 3D LUT / .cube film look' },
   solidColor:         { label: 'Solid Colour',        group: 'Colour & Hue',     hint: 'Paint a colour into an area — lips, eyes, a garment' },
-  whiteBalance:       { label: 'White Balance',        group: 'Colour & Hue',     hint: 'Temperature and tint — the two axes of a lighting cast' },
+  whiteBalance:       { label: 'White Balance',       group: 'Colour & Hue',     hint: 'Temperature and tint — the two axes of a lighting cast' },
+  highlightsShadows:  { label: 'Highlights/Shadows',  group: 'Light & Contrast', hint: 'Brighten or crush the ends of the tone scale' },
+  clarity:            { label: 'Clarity',             group: 'Detail',           hint: 'Midtone local contrast — punch or soft haze' },
+  sharpness:          { label: 'Sharpness',           group: 'Detail',           hint: 'Fine-edge unsharp mask' },
+  grain:              { label: 'Grain',               group: 'Detail',           hint: 'Aesthetic film grain, not sensor noise' },
+  noiseReduction:     { label: 'Noise Reduction',     group: 'Detail',           hint: 'Soften fine noise, or add texture when negative' },
+  colorChrome:        { label: 'Color Chrome',        group: 'Colour & Hue',     hint: 'Deepen saturated colours, with a blue-only mode' },
 }
 
 export function defaultParams(kind: AdjustmentKind): ParamsFor<AdjustmentKind> {
@@ -484,6 +546,22 @@ export function defaultParams(kind: AdjustmentKind): ParamsFor<AdjustmentKind> {
       return { color: [0.85, 0.35, 0.42] } satisfies SolidColorParams
     case 'whiteBalance':
       return { temperature: 0, tint: 0, preserveLuminosity: true } satisfies WhiteBalanceParams
+    case 'highlightsShadows':
+      return { highlights: 0, shadows: 0 } satisfies HighlightsShadowsParams
+    case 'clarity':
+      return { amount: 0 } satisfies ClarityParams
+    case 'sharpness':
+      return { amount: 0 } satisfies SharpnessParams
+    case 'grain':
+      return { amount: 0, size: 35 } satisfies GrainParams
+    case 'noiseReduction':
+      return { amount: 0 } satisfies NoiseReductionParams
+    case 'colorChrome':
+      return { amount: 0, blue: 0 } satisfies ColorChromeParams
+    default: {
+      const _exhaustive: never = kind
+      return _exhaustive
+    }
   }
 }
 

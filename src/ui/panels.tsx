@@ -17,6 +17,8 @@ import type {
   ColorBalanceParams, ToneRange, SelectiveColorParams, SelectiveColorKey, CMYK,
   ReplaceColorParams, BlackWhiteParams, ChannelMixerParams, PhotoFilterParams,
   GradientMapParams, ColorLookupParams, SolidColorParams, WhiteBalanceParams,
+  HighlightsShadowsParams, ClarityParams, SharpnessParams, GrainParams,
+  NoiseReductionParams, ColorChromeParams,
 } from '../state/types'
 
 function usePatch(id: string) {
@@ -750,6 +752,100 @@ function SolidColorPanel({ layer }: { layer: Layer }) {
 
 // ---------------------------------------------------------------------------
 
+function HighlightsShadowsPanel({ layer }: { layer: Layer }) {
+  const p = layer.params as HighlightsShadowsParams
+  const patch = usePatch(layer.id)
+  return (
+    <>
+      <Slider label="Highlights" value={p.highlights} min={-100} max={100}
+        onChange={(v) => patch({ highlights: v })} />
+      <Slider label="Shadows" value={p.shadows} min={-100} max={100}
+        onChange={(v) => patch({ shadows: v })} />
+      <p className="hint">
+        Positive lifts that end of the tone scale; negative crushes it. Softer
+        than Curves when you just want the bright or dark end moved.
+      </p>
+    </>
+  )
+}
+
+function ClarityPanel({ layer }: { layer: Layer }) {
+  const p = layer.params as ClarityParams
+  const patch = usePatch(layer.id)
+  return (
+    <>
+      <Slider label="Clarity" value={p.amount} min={-100} max={100}
+        onChange={(v) => patch({ amount: v })} />
+      <p className="hint">
+        Midtone local contrast. Positive adds punch; negative softens like a
+        light haze. Highlights and deep shadows are mostly left alone.
+      </p>
+    </>
+  )
+}
+
+function SharpnessPanel({ layer }: { layer: Layer }) {
+  const p = layer.params as SharpnessParams
+  const patch = usePatch(layer.id)
+  return (
+    <>
+      <Slider label="Sharpness" value={p.amount} min={-100} max={100}
+        onChange={(v) => patch({ amount: v })} />
+      <p className="hint">Fine-edge unsharp mask. Negative softens detail.</p>
+    </>
+  )
+}
+
+function GrainPanel({ layer }: { layer: Layer }) {
+  const p = layer.params as GrainParams
+  const patch = usePatch(layer.id)
+  return (
+    <>
+      <Slider label="Amount" value={p.amount} min={0} max={100}
+        onChange={(v) => patch({ amount: v })} />
+      <Slider label="Size" value={p.size} min={0} max={100}
+        onChange={(v) => patch({ size: v })} />
+      <p className="hint">
+        Aesthetic film grain, not sensor noise. Size coarsens the grain cells.
+      </p>
+    </>
+  )
+}
+
+function NoiseReductionPanel({ layer }: { layer: Layer }) {
+  const p = layer.params as NoiseReductionParams
+  const patch = usePatch(layer.id)
+  return (
+    <>
+      <Slider label="Noise Reduction" value={p.amount} min={-100} max={100}
+        onChange={(v) => patch({ amount: v })} />
+      <p className="hint">
+        Positive blends toward a soft neighbourhood average. Negative adds
+        texture — a coarse stand-in for turning High ISO NR down.
+      </p>
+    </>
+  )
+}
+
+function ColorChromePanel({ layer }: { layer: Layer }) {
+  const p = layer.params as ColorChromeParams
+  const patch = usePatch(layer.id)
+  return (
+    <>
+      <Slider label="Color Chrome" value={p.amount} min={0} max={100}
+        onChange={(v) => patch({ amount: v })} />
+      <Slider label="FX Blue" value={p.blue} min={0} max={100}
+        onChange={(v) => patch({ blue: v })} />
+      <p className="hint">
+        Deepens already-saturated colours without a global saturation push.
+        FX Blue only touches blue-dominant pixels — skies and water.
+      </p>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
 const PANELS: Record<Layer['kind'], (props: { layer: Layer }) => JSX.Element> = {
   brightnessContrast: BrightnessContrastPanel,
   levels: LevelsPanel,
@@ -767,6 +863,12 @@ const PANELS: Record<Layer['kind'], (props: { layer: Layer }) => JSX.Element> = 
   colorLookup: ColorLookupPanel,
   solidColor: SolidColorPanel,
   whiteBalance: WhiteBalancePanel,
+  highlightsShadows: HighlightsShadowsPanel,
+  clarity: ClarityPanel,
+  sharpness: SharpnessPanel,
+  grain: GrainPanel,
+  noiseReduction: NoiseReductionPanel,
+  colorChrome: ColorChromePanel,
 }
 
 export function AdjustmentPanel({ layer }: { layer: Layer }) {

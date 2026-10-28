@@ -79,10 +79,10 @@ export function Slider(props: {
           onDoubleClick={() => { pushHistory(); onChange(neutral) }}
           onChange={(e) => onChange(parseFloat(e.target.value))}
           style={{
-            // Colour-meaning tracks keep their gradient; plain ones fill from
-            // the neutral point out to the current value, so you can read how
-            // far you have pushed a slider and in which direction.
-            background: accent
+            // Use backgroundImage only — a shorthand `background` would wipe
+            // background-color, and at the neutral value the fill collapses to
+            // zero width, leaving an invisible track with a floating thumb.
+            backgroundImage: accent
               ? `linear-gradient(to right, ${accent})`
               : `linear-gradient(to right,`
                 + ` transparent ${Math.min(pct, neutralPct)}%,`

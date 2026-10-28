@@ -22,6 +22,10 @@ import {
   type AdjustmentKind, type Layer, type Mask,
 } from './state/types'
 import {
+  DEFAULT_FUJI_RECIPE, FUJI_FILMS, buildFujiRecipe,
+  type FujiRecipe,
+} from './engine/fuji'
+import {
   ensureSegmentation, ensureFaceRegions, peekSegmentation, forgetSegmentation,
   SEGMENT_CLASSES, personCoverage,
 } from './engine/segment'
@@ -218,7 +222,8 @@ const METHODS = [
   { call: 'segment(opts?)', spec: '{ force?, faces? }', returns: 'what the segmenter found, as % of frame — check before using a segmented mask. faces:true also finds lips, eyes and brows' },
   { call: 'export(opts?)', spec: "{ format: 'png' | 'jpeg', quality?, download?, as? }", returns: '{ w, h, bytes }' },
   { call: 'reset()', returns: 'clears every layer' },
-  { call: 'help(topic?)', spec: "topic: an adjustment kind, 'masks', or 'methods'", returns: 'this' },
+  { call: 'fuji(recipe?, opts?)', spec: 'partial Fuji Image Quality recipe → layer stack; { replace = true }', returns: '{ layers, recipe }' },
+  { call: 'help(topic?)', spec: "topic: an adjustment kind, 'masks', 'fuji', or 'methods'", returns: 'this' },
 ]
 
 /**
@@ -422,6 +427,16 @@ export const colourlab = {
       }
     }
 
+    if (topic === 'fuji') {
+      return {
+        what: 'Fuji-style Image Quality recipe. Compiles to ordinary adjustment layers.',
+        note: 'Relative simulation — not a Fujifilm JPEG. A Look stores fixed values; this rebuilds a stack from camera-like controls.',
+        defaults: DEFAULT_FUJI_RECIPE,
+        films: FUJI_FILMS.map((f) => ({ id: f.id, name: f.name, hint: f.hint })),
+        example: "await colourlab.fuji({ film: 'chrome', grain: 'WEAK', color: 1, clarity: 2 })",
+      }
+    }
+
     if (topic && KINDS.includes(topic as AdjustmentKind)) {
       const kind = topic as AdjustmentKind
       return {
@@ -433,7 +448,7 @@ export const colourlab = {
       }
     }
     if (topic) {
-      return { error: `No help for "${topic}".`, adjustments: KINDS, topics: ['methods', 'masks'] }
+      return { error: `No help for "${topic}".`, adjustments: KINDS, topics: ['methods', 'masks', 'fuji'] }
     }
 
     return {
@@ -445,7 +460,7 @@ export const colourlab = {
       fixes: FIXES.map((f) => f.id),
       blendModes: BLEND_MODES,
       maskKinds: Object.keys(MASK_META),
-      more: "help('methods') for signatures, help('masks') for mask fields and their units, help('<adjustment>') for its parameters",
+      more: "help('methods') for signatures, help('masks') for mask fields, help('fuji') for the Fuji recipe, help('<adjustment>') for its parameters",
     }
   },
 
@@ -546,6 +561,22 @@ export const colourlab = {
       enabled: l.enabled, opacity: l.opacity, blend: l.blend,
       mask: l.mask.kind === 'none' ? undefined : l.mask.kind,
     }))
+  },
+
+  /**
+   * Apply a Fuji Image Quality recipe. Controls match the camera menu
+   * (film / grain / chrome / color / DR / sharpness / clarity / H&S / NR / WB)
+   * and compile into ordinary layers — see help('fuji').
+   */
+  async fuji(partial: Partial<FujiRecipe> = {}, opts: { replace?: boolean; history?: boolean } = {}) {
+    const recipe: FujiRecipe = { ...DEFAULT_FUJI_RECIPE, ...partial }
+    const layers = buildFujiRecipe(recipe)
+    const store = useStore.getState()
+    if (opts.replace === false) store.applyLook(layers, { history: opts.history })
+    else store.loadRecipe(layers, { history: opts.history })
+    markRenderPending()
+    await settle()
+    return { layers: useStore.getState().layers.length, recipe }
   },
 
   /** Replace (default) or append to the stack. Accepts terse layer specs. */
