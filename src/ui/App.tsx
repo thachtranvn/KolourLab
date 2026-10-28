@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Renderer, type Histogram } from '../engine/renderer'
 import { useStore, surroundValue, SURROUNDS } from '../state/store'
 import { HistogramContext, HistogramView } from './controls'
@@ -8,6 +9,126 @@ import { SegmentContext } from './MaskPanel'
 import { makeSampleImage } from './sample'
 import { colourlab, setApiRenderer, notifyRendered, markRenderPending, abortPendingFrames, ensureMasksReady } from '../api'
 import type { Layer } from '../state/types'
+
+/**
+ * Overflow for secondary chrome. The topbar stays one row — Open, undo/redo,
+ * hold-to-compare, Export — and everything else lives behind ⋯.
+ */
+function MoreMenu({
+  anchor, onClose, onSample, onExportPng, onImportRecipe, onExportRecipe,
+}: {
+  anchor: HTMLElement
+  onClose: () => void
+  onSample: () => void
+  onExportPng: () => void
+  onImportRecipe: () => void
+  onExportRecipe: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+
+  const image = useStore((s) => s.image)
+  const layers = useStore((s) => s.layers)
+  const zoom = useStore((s) => s.zoom)
+  const compare = useStore((s) => s.compare)
+  const surround = useStore((s) => s.surround)
+  const showHistogram = useStore((s) => s.showHistogram)
+  const setCompare = useStore((s) => s.setCompare)
+  const setZoom = useStore((s) => s.setZoom)
+  const zoomToFit = useStore((s) => s.zoomToFit)
+  const setSurround = useStore((s) => s.setSurround)
+  const toggleHistogram = useStore((s) => s.toggleHistogram)
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const a = anchor.getBoundingClientRect()
+      const width = 260
+      const left = Math.max(8, Math.min(a.right - width, window.innerWidth - width - 8))
+      const top = Math.min(a.bottom + 6, window.innerHeight - 8)
+      setPos({ left, top })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [anchor])
+
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node) && !anchor.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [anchor, onClose])
+
+  if (!pos) return null
+
+  return createPortal(
+    <div className="more-menu" ref={ref} style={{ left: pos.left, top: pos.top }} role="menu">
+      <button type="button" role="menuitem" onClick={() => { onSample(); onClose() }}>
+        Load sample image
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!image}
+        className={compare === 1 ? 'active' : ''}
+        onClick={() => { setCompare(compare === 1 ? 0 : 1); onClose() }}
+      >
+        {compare === 1 ? 'Exit split view' : 'Split before / after'}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!image}
+        onClick={() => { toggleHistogram(); onClose() }}
+      >
+        {showHistogram ? 'Hide histogram' : 'Show histogram'}
+      </button>
+
+      <div className="more-sep" />
+      <div className="more-label">Zoom</div>
+      <div className="more-row">
+        <button type="button" disabled={!image} onClick={() => setZoom(zoom / 1.25)} aria-label="Zoom out">−</button>
+        <button type="button" disabled={!image} onClick={() => { zoomToFit(); onClose() }}>
+          {Math.round(zoom * 100)}% · Fit
+        </button>
+        <button type="button" disabled={!image} onClick={() => setZoom(zoom * 1.25)} aria-label="Zoom in">+</button>
+      </div>
+
+      <div className="more-sep" />
+      <div className="more-label">Backdrop</div>
+      <div className="more-row surround">
+        {SURROUNDS.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            className={`swatch-btn ${surround === s.key ? 'active' : ''}`}
+            style={{ background: `rgb(${Math.round(s.value * 255)},${Math.round(s.value * 255)},${Math.round(s.value * 255)})` }}
+            title={`${s.label} — ${s.hint}`}
+            onClick={() => setSurround(s.key)}
+          />
+        ))}
+      </div>
+
+      <div className="more-sep" />
+      <button type="button" role="menuitem" onClick={() => { onImportRecipe(); onClose() }}>
+        Import recipe…
+      </button>
+      <button type="button" role="menuitem" disabled={!layers.length} onClick={() => { onExportRecipe(); onClose() }}>
+        Save recipe
+      </button>
+      <button type="button" role="menuitem" disabled={!image} onClick={() => { onExportPng(); onClose() }}>
+        Export PNG
+      </button>
+    </div>,
+    document.body,
+  )
+}
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -31,6 +152,8 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [contextLost, setContextLost] = useState(false)
   const [glEpoch, setGlEpoch] = useState(0)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreBtnRef = useRef<HTMLButtonElement>(null)
 
   const image = useStore((s) => s.image)
   const layers = useStore((s) => s.layers)
@@ -46,7 +169,6 @@ export default function App() {
   const setBrush = useStore((s) => s.setBrush)
   const setPainting = useStore((s) => s.setPainting)
   const surround = useStore((s) => s.surround)
-  const setSurround = useStore((s) => s.setSurround)
   const chromeHidden = useStore((s) => s.chromeHidden)
   const toggleChrome = useStore((s) => s.toggleChrome)
   const surroundLevel = surroundValue(surround)
@@ -339,66 +461,67 @@ export default function App() {
     <HistogramContext.Provider value={hist}>
       <div className={`app ${chromeHidden ? 'chrome-hidden' : ''}`}>
         <header className="topbar">
-          <div className="brand">
+          <div className="brand" title="Colour Lab">
             <span className="logo">◐</span>
-            <span>Colour Lab</span>
+            <span className="brand-name">Colour Lab</span>
           </div>
+
+          <input ref={fileRef} type="file" accept="image/*" hidden
+            onChange={(e) => { if (e.target.files?.length) onFiles(e.target.files); e.target.value = '' }} />
+          <input ref={recipeRef} type="file" accept="application/json" hidden
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) importRecipe(f); e.target.value = '' }} />
 
           <div className="topbar-group">
-            <input ref={fileRef} type="file" accept="image/*" hidden
-              onChange={(e) => { if (e.target.files?.length) onFiles(e.target.files); e.target.value = '' }} />
-            <button className="btn" onClick={() => fileRef.current?.click()}>Open image</button>
-            <button className="btn" onClick={async () => loadSource(makeSampleImage(), 'sample.png')}>
-              Sample
+            <button className="btn" onClick={() => fileRef.current?.click()} title="Open image">
+              Open
             </button>
-          </div>
-
-          <div className="topbar-group">
-            <button className="btn" onClick={undo} title="Undo (⌘Z)">↶</button>
-            <button className="btn" onClick={redo} title="Redo (⇧⌘Z)">↷</button>
-          </div>
-
-          <div className="topbar-group">
-            <button className={`btn ${compare === 1 ? 'active' : ''}`} disabled={!image}
-              onClick={() => setCompare(compare === 1 ? 0 : 1)} title="Split before/after (\)">
-              Split
+            <button className="btn icon" onClick={undo} title="Undo (⌘Z)" aria-label="Undo">↶</button>
+            <button className="btn icon" onClick={redo} title="Redo (⇧⌘Z)" aria-label="Redo">↷</button>
+            <button
+              className={`btn ${compare === 2 ? 'active' : ''}`}
+              disabled={!image}
+              onPointerDown={(e) => { e.preventDefault(); setCompare(2) }}
+              onPointerUp={() => setCompare(0)}
+              onPointerCancel={() => setCompare(0)}
+              onPointerLeave={() => compare === 2 && setCompare(0)}
+              title="Hold to see the original (X)"
+            >
+              Before
             </button>
-            <button className={`btn ${compare === 2 ? 'active' : ''}`} disabled={!image}
-              onMouseDown={() => setCompare(2)} onMouseUp={() => setCompare(0)} onMouseLeave={() => compare === 2 && setCompare(0)}
-              title="Hold to see the original (X)">
-              Original
-            </button>
-          </div>
-
-          <div className="topbar-group surround" title="Backdrop the photo is matted against">
-            {SURROUNDS.map((s) => (
-              <button
-                key={s.key}
-                className={`swatch-btn ${surround === s.key ? 'active' : ''}`}
-                style={{ background: `rgb(${Math.round(s.value * 255)},${Math.round(s.value * 255)},${Math.round(s.value * 255)})` }}
-                title={`${s.label} — ${s.hint}`}
-                onClick={() => setSurround(s.key)}
-              />
-            ))}
-          </div>
-
-          <div className="topbar-group zoom">
-            <button className="btn" onClick={() => setZoom(zoom / 1.25)} disabled={!image}>−</button>
-            <button className="btn zoom-label" onClick={zoomToFit} disabled={!image}>
-              {Math.round(zoom * 100)}%
-            </button>
-            <button className="btn" onClick={() => setZoom(zoom * 1.25)} disabled={!image}>+</button>
           </div>
 
           <div className="topbar-spacer" />
 
           <div className="topbar-group">
-            <input ref={recipeRef} type="file" accept="application/json" hidden
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) importRecipe(f); e.target.value = '' }} />
-            <button className="btn" onClick={() => recipeRef.current?.click()}>Import recipe</button>
-            <button className="btn" disabled={!layers.length} onClick={exportRecipe}>Save recipe</button>
-            <button className="btn" disabled={!image} onClick={() => exportImage('image/jpeg')}>Export JPEG</button>
-            <button className="btn primary" disabled={!image} onClick={() => exportImage('image/png')}>Export PNG</button>
+            <button
+              className="btn primary"
+              disabled={!image}
+              onClick={() => exportImage('image/jpeg')}
+              title="Export JPEG"
+            >
+              Export
+            </button>
+            <button
+              ref={moreBtnRef}
+              className={`btn icon ${moreOpen ? 'active' : ''}`}
+              aria-label="More"
+              aria-haspopup="menu"
+              aria-expanded={moreOpen}
+              title="More"
+              onClick={() => setMoreOpen((v) => !v)}
+            >
+              ⋯
+            </button>
+            {moreOpen && moreBtnRef.current && (
+              <MoreMenu
+                anchor={moreBtnRef.current}
+                onClose={() => setMoreOpen(false)}
+                onSample={() => { void loadSource(makeSampleImage(), 'sample.png') }}
+                onExportPng={() => { void exportImage('image/png') }}
+                onImportRecipe={() => recipeRef.current?.click()}
+                onExportRecipe={exportRecipe}
+              />
+            )}
           </div>
         </header>
 
